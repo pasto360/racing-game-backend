@@ -14,6 +14,7 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
     origin: process.env.FRONTEND_URL || '*',
