@@ -271,18 +271,3 @@ app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
 ```
-
-4. Clicca **"Commit changes"**
-
----
-
-### FILE 3: `.env.example`
-
-1. Clicca **"Add file"** → **"Create new file"**
-2. Nome file: `.env.example`
-3. Contenuto:
-```
-DATABASE_URL=your_supabase_connection_string_here
-JWT_SECRET=your_super_secret_key_min_32_chars
-FRONTEND_URL=https://your-game.vercel.app
-PORT=3000
