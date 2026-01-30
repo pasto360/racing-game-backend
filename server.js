@@ -14,6 +14,9 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'PRESENTE' : 'MANCANTE');
+console.log('Tentativo connessione a:', process.env.DATABASE_URL?.substring(0, 30) + '...');
+
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
