@@ -14,8 +14,11 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-console.log('DATABASE_URL:', process.env.DATABASE_URL ? 'PRESENTE' : 'MANCANTE');
-console.log('Tentativo connessione a:', process.env.DATABASE_URL?.substring(0, 30) + '...');
+// DEBUG - Rimuovere dopo test
+console.log('=== DEBUG DATABASE ===');
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('DATABASE_URL value:', process.env.DATABASE_URL?.substring(0, 40) + '...');
+console.log('======================');
 
 app.set('trust proxy', 1);
 app.use(helmet());
