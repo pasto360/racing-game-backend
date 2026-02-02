@@ -14,12 +14,6 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// DEBUG - Rimuovere dopo test
-console.log('=== DEBUG DATABASE ===');
-console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
-console.log('DATABASE_URL value:', process.env.DATABASE_URL?.substring(0, 40) + '...');
-console.log('======================');
-
 app.set('trust proxy', 1);
 app.use(helmet());
 app.use(cors({
@@ -33,7 +27,7 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
@@ -64,17 +58,90 @@ app.post('/api/auth/register', async (req, res) => {
             'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
             [username, email, passwordHash]
         );
+        
+        // Crea stato gioco iniziale
         const initialState = {
-            resources: { money: { value: 15000 }, parts: { value: 150 }, reputation: { value: 0 }, energy: { value: 100 } },
-            workshop: { engine: { level: 0, unlocked: true }, electronics: { level: 0, unlocked: false }, body: { level: 0, unlocked: false }, aerodynamics: { level: 0, unlocked: false } },
-            owned_cars: [],
-            races: { completed: 0, wins: 0 },
-            race_history: []
+            resources: {
+                money: { value: 15000, rate: 0, max: 999999 },
+                parts: { value: 150, rate: 0, max: 999999 },
+                reputation: { value: 0, rate: 0, max: 10000 },
+                energy: { value: 100, rate: 0, max: 100 }
+            },
+            workshop: {
+                engine: { level: 0, unlocked: true },
+                electronics: { level: 0, unlocked: false },
+                body: { level: 0, unlocked: false },
+                aerodynamics: { level: 0, unlocked: false }
+            },
+            ownedCars: [],
+            drivers: [
+                { unlocked: true },
+                { unlocked: true },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false }
+            ],
+            currentDriver: null,
+            sponsors: [
+                { unlocked: true },
+                { unlocked: true },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false },
+                { unlocked: false }
+            ],
+            currentSponsor: null,
+            technologies: [
+                { id: 'turbo', researched: false },
+                { id: 'carbon', researched: false },
+                { id: 'ecu', researched: false },
+                { id: 'aero', researched: false },
+                { id: 'suspension', researched: false },
+                { id: 'nitro', researched: false },
+                { id: 'weight', researched: false },
+                { id: 'cooling', researched: false }
+            ],
+            races: {
+                completed: 0,
+                wins: 0,
+                lastRaceTime: 0,
+                cooldown: 30000
+            },
+            championship: {
+                active: false,
+                currentRace: 0,
+                totalRaces: 5,
+                wins: 0,
+                results: [],
+                entryFee: 7000,
+                prizePool: 5000
+            },
+            raceHistory: [],
+            lastSaveTime: Date.now()
         };
+        
         await pool.query(
-            'INSERT INTO game_state (user_id, resources, workshop, owned_cars, races, race_history) VALUES ($1, $2, $3, $4, $5, $6)',
-            [result.rows[0].id, JSON.stringify(initialState.resources), JSON.stringify(initialState.workshop), JSON.stringify(initialState.owned_cars), JSON.stringify(initialState.races), JSON.stringify(initialState.race_history)]
+            'INSERT INTO game_state (user_id, resources, workshop, owned_cars, drivers, current_driver, sponsors, current_sponsor, technologies, races, championship, race_history, last_save) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())',
+            [
+                result.rows[0].id,
+                JSON.stringify(initialState.resources),
+                JSON.stringify(initialState.workshop),
+                JSON.stringify(initialState.ownedCars),
+                JSON.stringify(initialState.drivers),
+                JSON.stringify(initialState.currentDriver),
+                JSON.stringify(initialState.sponsors),
+                JSON.stringify(initialState.currentSponsor),
+                JSON.stringify(initialState.technologies),
+                JSON.stringify(initialState.races),
+                JSON.stringify(initialState.championship),
+                JSON.stringify(initialState.raceHistory)
+            ]
         );
+        
         res.status(201).json({ message: 'Registrazione completata', user: result.rows[0] });
     } catch (error) {
         if (error.constraint === 'users_username_key') {
@@ -111,11 +178,17 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/game/state', authenticateToken, async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM game_state WHERE user_id = $1', [req.user.userId]);
+        const result = await pool.query(
+            'SELECT * FROM game_state WHERE user_id = $1',
+            [req.user.userId]
+        );
+        
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Stato gioco non trovato' });
         }
+        
         const gameState = result.rows[0];
+        
         res.json({
             resources: gameState.resources,
             workshop: gameState.workshop,
@@ -128,10 +201,10 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
             races: gameState.races,
             championship: gameState.championship,
             raceHistory: gameState.race_history,
-            lastSave: gameState.last_save
+            lastSaveTime: gameState.last_save ? new Date(gameState.last_save).getTime() : Date.now()
         });
     } catch (error) {
-        console.error(error);
+        console.error('Errore GET /api/game/state:', error);
         res.status(500).json({ error: 'Errore caricamento' });
     }
 });
@@ -139,28 +212,55 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
 app.post('/api/game/state', authenticateToken, async (req, res) => {
     try {
         const { gameState } = req.body;
+        
         if (!gameState || typeof gameState !== 'object') {
             return res.status(400).json({ error: 'Dati non validi' });
         }
+        
         if (gameState.resources?.money?.value > 50000000) {
             return res.status(400).json({ error: 'Valori sospetti' });
         }
+        
         await pool.query(
-            'UPDATE game_state SET resources = $1, workshop = $2, owned_cars = $3, drivers = $4, current_driver = $5, sponsors = $6, current_sponsor = $7, technologies = $8, races = $9, championship = $10, race_history = $11, last_save = NOW() WHERE user_id = $12',
-            [JSON.stringify(gameState.resources), JSON.stringify(gameState.workshop), JSON.stringify(gameState.ownedCars), JSON.stringify(gameState.drivers), JSON.stringify(gameState.currentDriver), JSON.stringify(gameState.sponsors), JSON.stringify(gameState.currentSponsor), JSON.stringify(gameState.technologies), JSON.stringify(gameState.races), JSON.stringify(gameState.championship), JSON.stringify(gameState.raceHistory), req.user.userId]
+            `UPDATE game_state SET 
+                resources = $1,
+                workshop = $2,
+                owned_cars = $3,
+                drivers = $4,
+                current_driver = $5,
+                sponsors = $6,
+                current_sponsor = $7,
+                technologies = $8,
+                races = $9,
+                championship = $10,
+                race_history = $11,
+                last_save = NOW()
+             WHERE user_id = $12`,
+            [
+                JSON.stringify(gameState.resources),
+                JSON.stringify(gameState.workshop),
+                JSON.stringify(gameState.ownedCars),
+                JSON.stringify(gameState.drivers),
+                JSON.stringify(gameState.currentDriver),
+                JSON.stringify(gameState.sponsors),
+                JSON.stringify(gameState.currentSponsor),
+                JSON.stringify(gameState.technologies),
+                JSON.stringify(gameState.races),
+                JSON.stringify(gameState.championship),
+                JSON.stringify(gameState.raceHistory),
+                req.user.userId
+            ]
         );
-        res.json({ success: true });
+        
+        res.json({ success: true, timestamp: Date.now() });
     } catch (error) {
-        console.error(error);
+        console.error('Errore POST /api/game/state:', error);
         res.status(500).json({ error: 'Errore salvataggio' });
     }
 });
 
-// Classifica globale (UNICO endpoint)
 app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     try {
-        console.log('📊 Richiesta classifica da:', req.user.username);
-        
         const allPlayers = await pool.query(
             `SELECT u.username, 
                     COALESCE((gs.resources->'reputation'->>'value')::int, 0) as reputation
@@ -168,8 +268,6 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
              JOIN users u ON u.id = gs.user_id 
              ORDER BY reputation DESC`
         );
-
-        console.log('📊 Trovati giocatori:', allPlayers.rows.length);
 
         const leaderboard = allPlayers.rows;
         const top20 = leaderboard.slice(0, 20);
@@ -186,22 +284,20 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
             };
         }
 
-        console.log('📊 Top20:', top20.length, 'UserRank:', userRank);
-
         res.json({ leaderboard: top20, userRank: userRank });
 
     } catch (error) {
-        console.error('❌ Errore classifica:', error);
+        console.error('Errore classifica:', error);
         res.status(500).json({ error: 'Errore caricamento classifica' });
     }
 });
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok' });
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Database connected`);
 });
-
