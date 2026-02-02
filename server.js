@@ -156,44 +156,24 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
     }
 });
 
-// Classifica globale (top 20 + posizione utente)
+// Classifica globale (UNICO endpoint)
 app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     try {
-        // Top 20 giocatori per reputazione
-        const { data: topPlayers, error: topError } = await supabase
-            .from('game_states')
-            .select('user_id, game_state')
-            .order('id', { ascending: false })
-            .limit(1000);
+        console.log('📊 Richiesta classifica da:', req.user.username);
+        
+        const allPlayers = await pool.query(
+            `SELECT u.username, 
+                    COALESCE((gs.resources->'reputation'->>'value')::int, 0) as reputation
+             FROM game_state gs 
+             JOIN users u ON u.id = gs.user_id 
+             ORDER BY reputation DESC`
+        );
 
-        if (topError) throw topError;
+        console.log('📊 Trovati giocatori:', allPlayers.rows.length);
 
-        // Estrai username e reputazione
-        const leaderboard = [];
-        for (const player of topPlayers) {
-            if (player.game_state && player.game_state.resources && player.game_state.resources.reputation) {
-                const { data: userData } = await supabase
-                    .from('users')
-                    .select('username')
-                    .eq('id', player.user_id)
-                    .single();
-
-                if (userData) {
-                    leaderboard.push({
-                        username: userData.username,
-                        reputation: player.game_state.resources.reputation.value || 0
-                    });
-                }
-            }
-        }
-
-        // Ordina per reputazione decrescente
-        leaderboard.sort((a, b) => b.reputation - a.reputation);
-
-        // Prendi top 20
+        const leaderboard = allPlayers.rows;
         const top20 = leaderboard.slice(0, 20);
 
-        // Trova posizione utente corrente
         const currentUsername = req.user.username;
         const userIndex = leaderboard.findIndex(p => p.username === currentUsername);
         
@@ -206,24 +186,13 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
             };
         }
 
-        res.json({
-            leaderboard: top20,
-            userRank: userRank
-        });
+        console.log('📊 Top20:', top20.length, 'UserRank:', userRank);
+
+        res.json({ leaderboard: top20, userRank: userRank });
 
     } catch (error) {
-        console.error('Errore classifica:', error);
+        console.error('❌ Errore classifica:', error);
         res.status(500).json({ error: 'Errore caricamento classifica' });
-    }
-});
-
-app.get('/api/game/leaderboard', async (req, res) => {
-    try {
-        const result = await pool.query("SELECT u.username, (gs.races->>'wins')::int as wins, (gs.races->>'completed')::int as completed, (gs.resources->'reputation'->>'value')::int as reputation FROM game_state gs JOIN users u ON u.id = gs.user_id ORDER BY reputation DESC LIMIT 100");
-        res.json(result.rows);
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Errore classifica' });
     }
 });
 
