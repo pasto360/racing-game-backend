@@ -217,6 +217,16 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     }
 });
 
+app.get('/api/game/leaderboard', async (req, res) => {
+    try {
+        const result = await pool.query("SELECT u.username, (gs.races->>'wins')::int as wins, (gs.races->>'completed')::int as completed, (gs.resources->'reputation'->>'value')::int as reputation FROM game_state gs JOIN users u ON u.id = gs.user_id ORDER BY reputation DESC LIMIT 100");
+        res.json(result.rows);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Errore classifica' });
+    }
+});
+
 app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
 });
@@ -225,3 +235,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });
+
