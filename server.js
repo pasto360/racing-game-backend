@@ -306,7 +306,8 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
 app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     try {
         const allPlayers = await pool.query(
-            `SELECT u.username, 
+            `SELECT u.id as user_id,
+                    u.username, 
                     COALESCE((gs.resources->'reputation'->>'value')::int, 0) as reputation
              FROM game_state gs 
              JOIN users u ON u.id = gs.user_id 
@@ -333,6 +334,274 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     } catch (error) {
         console.error('Errore classifica:', error);
         res.status(500).json({ error: 'Errore caricamento classifica' });
+    }
+});
+
+// ===== ENDPOINT PVP: Sfida giocatore =====
+app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        const attackerId = req.user.userId;
+        const { defenderId } = req.body;
+        
+        if (!defenderId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Defender ID mancante' });
+        }
+        
+        if (attackerId === defenderId) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Non puoi sfidare te stesso' });
+        }
+        
+        // Controlla se ha già sfidato oggi
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        
+        const existingChallenge = await client.query(
+            'SELECT * FROM pvp_challenges WHERE attacker_id = $1 AND created_at >= $2',
+            [attackerId, todayStart]
+        );
+        
+        if (existingChallenge.rows.length > 0) {
+            await client.query('ROLLBACK');
+            return res.status(429).json({ 
+                error: 'Hai già sfidato un giocatore oggi',
+                nextChallengeTime: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString()
+            });
+        }
+        
+        // Carica dati attaccante
+        const attackerResult = await client.query(
+            'SELECT username, game_state FROM users WHERE id = $1',
+            [attackerId]
+        );
+        
+        if (attackerResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Attaccante non trovato' });
+        }
+        
+        const attackerData = attackerResult.rows[0];
+        const attackerState = attackerData.game_state;
+        
+        // Controlla energia
+        if (attackerState.resources.energy.value < 20) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Energia insufficiente (richiesta: 20)' });
+        }
+        
+        // Carica dati difensore
+        const defenderResult = await client.query(
+            'SELECT username, game_state FROM users WHERE id = $1',
+            [defenderId]
+        );
+        
+        if (defenderResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Difensore non trovato' });
+        }
+        
+        const defenderData = defenderResult.rows[0];
+        const defenderState = defenderData.game_state;
+        
+        // Verifica che entrambi abbiano auto
+        if (!attackerState.ownedCars || attackerState.ownedCars.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Devi possedere almeno un\'auto' });
+        }
+        
+        if (!defenderState.ownedCars || defenderState.ownedCars.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({ error: 'Il difensore non ha auto disponibili' });
+        }
+        
+        // Auto selezionate (ultima usata = selectedCarIndex)
+        const attackerCarIndex = attackerState.selectedCarIndex || 0;
+        const defenderCarIndex = defenderState.selectedCarIndex || 0;
+        
+        const attackerCar = attackerState.ownedCars[attackerCarIndex];
+        const defenderCar = defenderState.ownedCars[defenderCarIndex];
+        
+        // Calcola potenze (incluse tecnologie)
+        const calculatePower = (car, technologies) => {
+            let power = 0;
+            ['engine', 'body', 'electronics', 'aero'].forEach(stat => {
+                let statValue = car.stats[stat] + (car.upgrades[stat] * 10);
+                
+                // Aggiungi bonus tecnologie
+                if (technologies && Array.isArray(technologies)) {
+                    technologies.forEach(tech => {
+                        if (tech.researched) {
+                            if (tech.bonus && tech.bonus.stat === stat) {
+                                statValue += tech.bonus.value;
+                            } else if (tech.bonus && tech.bonus.type === 'allStats') {
+                                statValue += tech.bonus.value;
+                            }
+                        }
+                    });
+                }
+                
+                power += statValue;
+            });
+            return power * (car.condition / 100);
+        };
+        
+        const attackerPower = calculatePower(attackerCar, attackerState.technologies);
+        const defenderPower = calculatePower(defenderCar, defenderState.technologies);
+        
+        // Determina vincitore (con bonus difensore +5%)
+        const defenderBonus = defenderPower * 0.05;
+        const win = attackerPower > (defenderPower + defenderBonus);
+        
+        // Calcola premi
+        let rewards = {};
+        let loserUpdates = {};
+        
+        if (win) {
+            // Attaccante vince: prende 5% dal difensore
+            rewards = {
+                money: Math.floor(defenderState.resources.money.value * 0.05),
+                parts: Math.floor(defenderState.resources.parts.value * 0.05),
+                reputation: Math.floor(defenderState.resources.reputation.value * 0.05)
+            };
+            
+            loserUpdates = {
+                money: defenderState.resources.money.value - rewards.money,
+                parts: defenderState.resources.parts.value - rewards.parts,
+                reputation: defenderState.resources.reputation.value - rewards.reputation
+            };
+            
+            // Aggiorna difensore (perde risorse)
+            defenderState.resources.money.value = Math.max(0, loserUpdates.money);
+            defenderState.resources.parts.value = Math.max(0, loserUpdates.parts);
+            defenderState.resources.reputation.value = Math.max(0, loserUpdates.reputation);
+            
+            await client.query(
+                'UPDATE users SET game_state = $1 WHERE id = $2',
+                [defenderState, defenderId]
+            );
+            
+            // Aggiorna attaccante (guadagna risorse - energia)
+            attackerState.resources.money.value += rewards.money;
+            attackerState.resources.parts.value += rewards.parts;
+            attackerState.resources.reputation.value += rewards.reputation;
+            attackerState.resources.energy.value -= 20;
+            
+        } else {
+            // Difensore vince: prende 10% dall'attaccante
+            rewards = {
+                money: Math.floor(attackerState.resources.money.value * 0.10),
+                parts: Math.floor(attackerState.resources.parts.value * 0.10),
+                reputation: Math.floor(attackerState.resources.reputation.value * 0.10)
+            };
+            
+            loserUpdates = {
+                money: attackerState.resources.money.value - rewards.money,
+                parts: attackerState.resources.parts.value - rewards.parts,
+                reputation: attackerState.resources.reputation.value - rewards.reputation
+            };
+            
+            // Aggiorna attaccante (perde risorse + energia)
+            attackerState.resources.money.value = Math.max(0, loserUpdates.money);
+            attackerState.resources.parts.value = Math.max(0, loserUpdates.parts);
+            attackerState.resources.reputation.value = Math.max(0, loserUpdates.reputation);
+            attackerState.resources.energy.value -= 20;
+            
+            // Aggiorna difensore (guadagna risorse)
+            defenderState.resources.money.value += rewards.money;
+            defenderState.resources.parts.value += rewards.parts;
+            defenderState.resources.reputation.value += rewards.reputation;
+            
+            await client.query(
+                'UPDATE users SET game_state = $1 WHERE id = $2',
+                [defenderState, defenderId]
+            );
+        }
+        
+        // Salva stato attaccante aggiornato
+        await client.query(
+            'UPDATE users SET game_state = $1 WHERE id = $2',
+            [attackerState, attackerId]
+        );
+        
+        // Registra sfida
+        await client.query(
+            `INSERT INTO pvp_challenges 
+             (attacker_id, defender_id, attacker_username, defender_username, 
+              attacker_car, defender_car, attacker_power, defender_power, 
+              winner_id, rewards, created_at) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`,
+            [
+                attackerId,
+                defenderId,
+                attackerData.username,
+                defenderData.username,
+                attackerCar.name,
+                defenderCar.name,
+                Math.floor(attackerPower),
+                Math.floor(defenderPower),
+                win ? attackerId : defenderId,
+                JSON.stringify(rewards)
+            ]
+        );
+        
+        await client.query('COMMIT');
+        
+        res.json({
+            success: true,
+            win: win,
+            attacker: {
+                username: attackerData.username,
+                car: attackerCar.name,
+                power: Math.floor(attackerPower)
+            },
+            defender: {
+                username: defenderData.username,
+                car: defenderCar.name,
+                power: Math.floor(defenderPower)
+            },
+            rewards: rewards,
+            newState: attackerState
+        });
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Errore PvP challenge:', error);
+        res.status(500).json({ error: 'Errore durante la sfida' });
+    } finally {
+        client.release();
+    }
+});
+
+// ===== ENDPOINT: Controlla se può sfidare oggi =====
+app.get('/api/pvp/can-challenge', authenticateToken, async (req, res) => {
+    try {
+        const userId = req.user.userId;
+        
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        
+        const result = await pool.query(
+            'SELECT created_at FROM pvp_challenges WHERE attacker_id = $1 AND created_at >= $2 ORDER BY created_at DESC LIMIT 1',
+            [userId, todayStart]
+        );
+        
+        const canChallenge = result.rows.length === 0;
+        const nextChallengeTime = canChallenge ? null : new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+        
+        res.json({
+            canChallenge: canChallenge,
+            nextChallengeTime: nextChallengeTime,
+            lastChallengeTime: result.rows.length > 0 ? result.rows[0].created_at : null
+        });
+        
+    } catch (error) {
+        console.error('Errore can-challenge:', error);
+        res.status(500).json({ error: 'Errore controllo sfida' });
     }
 });
 
