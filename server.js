@@ -339,7 +339,7 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     }
 });
 
-// ===== ENDPOINT PVP CORRETTO: Sfida giocatore =====
+// ===== ENDPOINT PVP: Sfida giocatore =====
 app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
     const client = await pool.connect();
     
@@ -378,7 +378,7 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             });
         }
         
-        // ✅ FIX: Carica dati attaccante da GAME_STATE (non da users)
+        // Carica dati attaccante
         const attackerResult = await client.query(
             `SELECT u.username, gs.* 
              FROM users u 
@@ -409,7 +409,7 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Energia insufficiente (richiesta: 20)' });
         }
         
-        // ✅ FIX: Carica dati difensore da GAME_STATE
+        // Carica dati difensore
         const defenderResult = await client.query(
             `SELECT u.username, gs.* 
              FROM users u 
@@ -458,7 +458,6 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             ['engine', 'body', 'electronics', 'aero'].forEach(stat => {
                 let statValue = car.stats[stat] + (car.upgrades[stat] * 10);
                 
-                // Aggiungi bonus tecnologie
                 if (technologies && Array.isArray(technologies)) {
                     technologies.forEach(tech => {
                         if (tech.researched) {
@@ -592,7 +591,7 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
         
         await client.query('COMMIT');
         
-        // Ricarica stato aggiornato attaccante per ritornarlo
+        // Ricarica stato aggiornato attaccante
         const updatedState = await client.query(
             'SELECT * FROM game_state WHERE user_id = $1',
             [attackerId]
