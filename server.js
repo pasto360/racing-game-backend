@@ -73,27 +73,31 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        // ⭐ NUOVO: Controlla limite 300 utenti
-        const { data: countData, error: countError } = await supabase
-            .from('users')
-            .select('id', { count: 'exact', head: true });
+        // Hash password
+        const passwordHash = await bcrypt.hash(password, 10);
         
-        if (countError) throw countError;
+        // Crea utente
+        const result = await pool.query(
+            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
+            [username, email, passwordHash]
+        );
         
-        const userCount = countData?.length || 0;
-        if (userCount >= 300) {
-            return res.status(403).json({ 
-                error: 'Server al completo. Registrazioni chiuse (300/300).' 
-            });
-        }
+        // Crea stato gioco iniziale (resto del codice uguale)
+        // ... 
         
-        // ... resto del codice esistente per creare utente
-        // (validazione, hash password, insert DB, ecc.)
+        res.status(201).json({ message: 'Registrazione completata', user: result.rows[0] });
         
     } catch (error) {
-        // ... gestione errori esistente
+        if (error.constraint === 'users_username_key') {
+            return res.status(400).json({ error: 'Username già esistente' });
+        }
+        if (error.constraint === 'users_email_key') {
+            return res.status(400).json({ error: 'Email già registrata' });
+        }
+        console.error('Errore registrazione:', error);
+        res.status(500).json({ error: 'Errore server' });
     }
-        
+});        
         // Hash password
         const passwordHash = await bcrypt.hash(password, 10);
         
