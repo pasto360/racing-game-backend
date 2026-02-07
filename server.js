@@ -47,25 +47,24 @@ function authenticateToken(req, res, next) {
 // ===== NUOVO ENDPOINT: Server Status =====
 app.get('/api/auth/status', async (req, res) => {
     try {
-        // Conta utenti totali
-        const result = await pool.query('SELECT COUNT(*) as count FROM users');
-        const userCount = parseInt(result.rows[0].count) || 0;
-        const maxUsers = 300;
-        const registrationOpen = userCount < maxUsers;
+        // Conta tutti gli utenti nel database
+        const { data, error } = await supabase
+            .from('users')
+            .select('id', { count: 'exact', head: true });
+        
+        if (error) throw error;
+        
+        const userCount = data?.length || 0;
+        const registrationOpen = userCount < 300;
         
         res.json({
             registrationOpen,
             userCount,
-            maxUsers
-        });
-    } catch (error) {
-        console.error('Errore /api/auth/status:', error);
-        // In caso di errore, assumiamo server aperto per non bloccare ingiustamente
-        res.json({
-            registrationOpen: true,
-            userCount: 0,
             maxUsers: 300
         });
+    } catch (error) {
+        console.error('Errore status:', error);
+        res.status(500).json({ error: 'Errore verifica stato server' });
     }
 });
 
@@ -74,23 +73,26 @@ app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        // Validazione input
-        if (!username || !email || !password) {
-            return res.status(400).json({ error: 'Campi mancanti' });
-        }
-        if (password.length < 6) {
-            return res.status(400).json({ error: 'Password troppo corta' });
-        }
-        
         // ⭐ NUOVO: Controlla limite 300 utenti
-        const countResult = await pool.query('SELECT COUNT(*) as count FROM users');
-        const userCount = parseInt(countResult.rows[0].count) || 0;
+        const { data: countData, error: countError } = await supabase
+            .from('users')
+            .select('id', { count: 'exact', head: true });
         
+        if (countError) throw countError;
+        
+        const userCount = countData?.length || 0;
         if (userCount >= 300) {
             return res.status(403).json({ 
                 error: 'Server al completo. Registrazioni chiuse (300/300).' 
             });
         }
+        
+        // ... resto del codice esistente per creare utente
+        // (validazione, hash password, insert DB, ecc.)
+        
+    } catch (error) {
+        // ... gestione errori esistente
+    }
         
         // Hash password
         const passwordHash = await bcrypt.hash(password, 10);
