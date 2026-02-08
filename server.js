@@ -188,10 +188,10 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
         const defenderPower = calculatePower(defenderCar, defenderState.technologies);
         const win = attackerPower > (defenderPower * 1.05);
         
-        // ✅ FIX DEFINITIVO: Converti PRIMA in integer, POI calcola rewards
         const attackerMoney = parseInt(attackerState.resources.money.value) || 0;
         const attackerParts = parseInt(attackerState.resources.parts.value) || 0;
         const attackerRep = parseInt(attackerState.resources.reputation.value) || 0;
+        const attackerEnergy = parseInt(attackerState.resources.energy.value) || 0;
         const defenderMoney = parseInt(defenderState.resources.money.value) || 0;
         const defenderParts = parseInt(defenderState.resources.parts.value) || 0;
         const defenderRep = parseInt(defenderState.resources.reputation.value) || 0;
@@ -203,15 +203,31 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             rewardParts = Math.floor(defenderParts * 0.05);
             rewardRep = Math.floor(defenderRep * 0.05);
             
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb($1)), '{parts,value}', to_jsonb($2)), '{reputation,value}', to_jsonb($3)) WHERE user_id = $4`, [Math.max(0, defenderMoney - rewardMoney), Math.max(0, defenderParts - rewardParts), Math.max(0, defenderRep - rewardRep), defenderId]);
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb($1)), '{parts,value}', to_jsonb($2)), '{reputation,value}', to_jsonb($3)), '{energy,value}', to_jsonb($4)) WHERE user_id = $5`, [attackerMoney + rewardMoney, attackerParts + rewardParts, attackerRep + rewardRep, Math.max(0, parseInt(attackerState.resources.energy.value) - 20), attackerId]);
+            const newDefenderMoney = Math.max(0, defenderMoney - rewardMoney);
+            const newDefenderParts = Math.max(0, defenderParts - rewardParts);
+            const newDefenderRep = Math.max(0, defenderRep - rewardRep);
+            const newAttackerMoney = attackerMoney + rewardMoney;
+            const newAttackerParts = attackerParts + rewardParts;
+            const newAttackerRep = attackerRep + rewardRep;
+            const newAttackerEnergy = Math.max(0, attackerEnergy - 20);
+            
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb), '{parts,value}', ($2)::int::text::jsonb), '{reputation,value}', ($3)::int::text::jsonb) WHERE user_id = $4`, [newDefenderMoney, newDefenderParts, newDefenderRep, defenderId]);
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb), '{parts,value}', ($2)::int::text::jsonb), '{reputation,value}', ($3)::int::text::jsonb), '{energy,value}', ($4)::int::text::jsonb) WHERE user_id = $5`, [newAttackerMoney, newAttackerParts, newAttackerRep, newAttackerEnergy, attackerId]);
         } else {
             rewardMoney = Math.floor(attackerMoney * 0.10);
             rewardParts = Math.floor(attackerParts * 0.10);
             rewardRep = Math.floor(attackerRep * 0.10);
             
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb($1)), '{parts,value}', to_jsonb($2)), '{reputation,value}', to_jsonb($3)), '{energy,value}', to_jsonb($4)) WHERE user_id = $5`, [Math.max(0, attackerMoney - rewardMoney), Math.max(0, attackerParts - rewardParts), Math.max(0, attackerRep - rewardRep), Math.max(0, parseInt(attackerState.resources.energy.value) - 20), attackerId]);
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb($1)), '{parts,value}', to_jsonb($2)), '{reputation,value}', to_jsonb($3)) WHERE user_id = $4`, [defenderMoney + rewardMoney, defenderParts + rewardParts, defenderRep + rewardRep, defenderId]);
+            const newAttackerMoney = Math.max(0, attackerMoney - rewardMoney);
+            const newAttackerParts = Math.max(0, attackerParts - rewardParts);
+            const newAttackerRep = Math.max(0, attackerRep - rewardRep);
+            const newAttackerEnergy = Math.max(0, attackerEnergy - 20);
+            const newDefenderMoney = defenderMoney + rewardMoney;
+            const newDefenderParts = defenderParts + rewardParts;
+            const newDefenderRep = defenderRep + rewardRep;
+            
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb), '{parts,value}', ($2)::int::text::jsonb), '{reputation,value}', ($3)::int::text::jsonb), '{energy,value}', ($4)::int::text::jsonb) WHERE user_id = $5`, [newAttackerMoney, newAttackerParts, newAttackerRep, newAttackerEnergy, attackerId]);
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb), '{parts,value}', ($2)::int::text::jsonb), '{reputation,value}', ($3)::int::text::jsonb) WHERE user_id = $4`, [newDefenderMoney, newDefenderParts, newDefenderRep, defenderId]);
         }
         
         const rewards = {money: rewardMoney, parts: rewardParts, reputation: rewardRep};
