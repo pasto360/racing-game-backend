@@ -194,12 +194,22 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             : {money: Math.floor(attackerState.resources.money.value * 0.10), parts: Math.floor(attackerState.resources.parts.value * 0.10), reputation: Math.floor(attackerState.resources.reputation.value * 0.10)};
         
         if (win) {
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, defenderId]);
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, attackerId]);
+            // Converti rewards in interi per evitare errori PostgreSQL
+            const rewardMoney = Math.floor(rewards.money);
+            const rewardParts = Math.floor(rewards.parts);
+            const rewardRep = Math.floor(rewards.reputation);
+    
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))) WHERE user_id = $4`, [rewardMoney, rewardParts, rewardRep, defenderId]);
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewardMoney, rewardParts, rewardRep, attackerId]);
         } else {
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, attackerId]);
-            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, defenderId]);
-        }
+        // Converti rewards in interi per evitare errori PostgreSQL
+            const rewardMoney = Math.floor(rewards.money);
+            const rewardParts = Math.floor(rewards.parts);
+            const rewardRep = Math.floor(rewards.reputation);
+    
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewardMoney, rewardParts, rewardRep, attackerId]);
+            await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)) WHERE user_id = $4`, [rewardMoney, rewardParts, rewardRep, defenderId]);
+}
         
         await client.query(`INSERT INTO pvp_challenges (attacker_id, defender_id, attacker_username, defender_username, attacker_car, defender_car, attacker_power, defender_power, winner_id, rewards, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`, [attackerId, defenderId, attackerUsername, defenderUsername, attackerCar.name, defenderCar.name, Math.floor(attackerPower), Math.floor(defenderPower), win ? attackerId : defenderId, JSON.stringify(rewards)]);
         
