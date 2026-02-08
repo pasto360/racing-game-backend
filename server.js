@@ -126,27 +126,73 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
         await client.query('BEGIN');
         const attackerId = req.user.userId;
         const { defenderId } = req.body;
+        
         if (!defenderId) {await client.query('ROLLBACK'); return res.status(400).json({ error: 'Defender ID mancante' });}
         if (attackerId === defenderId) {await client.query('ROLLBACK'); return res.status(400).json({ error: 'Non puoi sfidare te stesso' });}
+        
         const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
         const existingChallenge = await client.query('SELECT * FROM pvp_challenges WHERE attacker_id = $1 AND created_at >= $2', [attackerId, todayStart]);
         if (existingChallenge.rows.length > 0) {await client.query('ROLLBACK'); return res.status(429).json({error: 'Hai già sfidato un giocatore oggi', nextChallengeTime: new Date(todayStart.getTime() + 24 * 60 * 60 * 1000).toISOString()});}
+        
         const attackerResult = await client.query(`SELECT u.username, gs.* FROM users u JOIN game_state gs ON gs.user_id = u.id WHERE u.id = $1`, [attackerId]);
         if (attackerResult.rows.length === 0) {await client.query('ROLLBACK'); return res.status(404).json({ error: 'Attaccante non trovato' });}
-        const attackerData = attackerResult.rows[0]; const attackerUsername = attackerData.username;
-        const attackerState = {resources: attackerData.resources, ownedCars: attackerData.owned_cars, selectedCarIndex: attackerData.selected_car_index || 0, technologies: attackerData.technologies};
+        
+        const attackerData = attackerResult.rows[0];
+        const attackerUsername = attackerData.username;
+        const attackerState = {
+            resources: attackerData.resources,
+            ownedCars: attackerData.owned_cars,
+            technologies: attackerData.technologies
+        };
+        
         if (attackerState.resources.energy.value < 20) {await client.query('ROLLBACK'); return res.status(400).json({ error: 'Energia insufficiente (richiesta: 20)' });}
+        
         const defenderResult = await client.query(`SELECT u.username, gs.* FROM users u JOIN game_state gs ON gs.user_id = u.id WHERE u.id = $1`, [defenderId]);
         if (defenderResult.rows.length === 0) {await client.query('ROLLBACK'); return res.status(404).json({ error: 'Difensore non trovato' });}
-        const defenderData = defenderResult.rows[0]; const defenderUsername = defenderData.username;
-        const defenderState = {resources: defenderData.resources, ownedCars: defenderData.owned_cars, selectedCarIndex: defenderData.selected_car_index || 0, technologies: defenderData.technologies};
+        
+        const defenderData = defenderResult.rows[0];
+        const defenderUsername = defenderData.username;
+        const defenderState = {
+            resources: defenderData.resources,
+            ownedCars: defenderData.owned_cars,
+            technologies: defenderData.technologies
+        };
+        
         if (!attackerState.ownedCars || attackerState.ownedCars.length === 0) {await client.query('ROLLBACK'); return res.status(400).json({ error: 'Devi possedere almeno un\'auto' });}
         if (!defenderState.ownedCars || defenderState.ownedCars.length === 0) {await client.query('ROLLBACK'); return res.status(400).json({ error: 'Il difensore non ha auto disponibili' });}
-        const attackerCar = attackerState.ownedCars[attackerState.selectedCarIndex || 0]; const defenderCar = defenderState.ownedCars[defenderState.selectedCarIndex || 0];
-        const calculatePower = (car, technologies) => {let power = 0; ['engine', 'body', 'electronics', 'aero'].forEach(stat => {let statValue = car.stats[stat] + (car.upgrades[stat] * 10); if (technologies && Array.isArray(technologies)) {technologies.forEach(tech => {if (tech.researched) {if (tech.bonus && tech.bonus.stat === stat) {statValue += tech.bonus.value;} else if (tech.bonus && tech.bonus.type === 'allStats') {statValue += tech.bonus.value;}}});} power += statValue;}); return power * (car.condition / 100);};
-        const attackerPower = calculatePower(attackerCar, attackerState.technologies); const defenderPower = calculatePower(defenderCar, defenderState.technologies);
+        
+        // ✅ FIX: Usa sempre indice 0 (prima auto) invece di selected_car_index
+        const attackerCar = attackerState.ownedCars[0];
+        const defenderCar = defenderState.ownedCars[0];
+        
+        const calculatePower = (car, technologies) => {
+            let power = 0;
+            ['engine', 'body', 'electronics', 'aero'].forEach(stat => {
+                let statValue = car.stats[stat] + (car.upgrades[stat] * 10);
+                if (technologies && Array.isArray(technologies)) {
+                    technologies.forEach(tech => {
+                        if (tech.researched) {
+                            if (tech.bonus && tech.bonus.stat === stat) {
+                                statValue += tech.bonus.value;
+                            } else if (tech.bonus && tech.bonus.type === 'allStats') {
+                                statValue += tech.bonus.value;
+                            }
+                        }
+                    });
+                }
+                power += statValue;
+            });
+            return power * (car.condition / 100);
+        };
+        
+        const attackerPower = calculatePower(attackerCar, attackerState.technologies);
+        const defenderPower = calculatePower(defenderCar, defenderState.technologies);
         const win = attackerPower > (defenderPower * 1.05);
-        let rewards = win ? {money: Math.floor(defenderState.resources.money.value * 0.05), parts: Math.floor(defenderState.resources.parts.value * 0.05), reputation: Math.floor(defenderState.resources.reputation.value * 0.05)} : {money: Math.floor(attackerState.resources.money.value * 0.10), parts: Math.floor(attackerState.resources.parts.value * 0.10), reputation: Math.floor(attackerState.resources.reputation.value * 0.10)};
+        
+        let rewards = win 
+            ? {money: Math.floor(defenderState.resources.money.value * 0.05), parts: Math.floor(defenderState.resources.parts.value * 0.05), reputation: Math.floor(defenderState.resources.reputation.value * 0.05)} 
+            : {money: Math.floor(attackerState.resources.money.value * 0.10), parts: Math.floor(attackerState.resources.parts.value * 0.10), reputation: Math.floor(attackerState.resources.reputation.value * 0.10)};
+        
         if (win) {
             await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, defenderId]);
             await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, attackerId]);
@@ -154,11 +200,35 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb(GREATEST(0, (resources->'money'->>'value')::int - $1))), '{parts,value}', to_jsonb(GREATEST(0, (resources->'parts'->>'value')::int - $2))), '{reputation,value}', to_jsonb(GREATEST(0, (resources->'reputation'->>'value')::int - $3))), '{energy,value}', to_jsonb(GREATEST(0, (resources->'energy'->>'value')::int - 20))) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, attackerId]);
             await client.query(`UPDATE game_state SET resources = jsonb_set(jsonb_set(jsonb_set(resources, '{money,value}', to_jsonb((resources->'money'->>'value')::int + $1)), '{parts,value}', to_jsonb((resources->'parts'->>'value')::int + $2)), '{reputation,value}', to_jsonb((resources->'reputation'->>'value')::int + $3)) WHERE user_id = $4`, [rewards.money, rewards.parts, rewards.reputation, defenderId]);
         }
+        
         await client.query(`INSERT INTO pvp_challenges (attacker_id, defender_id, attacker_username, defender_username, attacker_car, defender_car, attacker_power, defender_power, winner_id, rewards, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())`, [attackerId, defenderId, attackerUsername, defenderUsername, attackerCar.name, defenderCar.name, Math.floor(attackerPower), Math.floor(defenderPower), win ? attackerId : defenderId, JSON.stringify(rewards)]);
+        
         await client.query('COMMIT');
+        
         const updatedState = await client.query('SELECT * FROM game_state WHERE user_id = $1', [attackerId]);
-        const newState = {resources: updatedState.rows[0].resources, workshop: updatedState.rows[0].workshop, ownedCars: updatedState.rows[0].owned_cars, drivers: updatedState.rows[0].drivers, currentDriver: updatedState.rows[0].current_driver, sponsors: updatedState.rows[0].sponsors, currentSponsor: updatedState.rows[0].current_sponsor, technologies: updatedState.rows[0].technologies, races: updatedState.rows[0].races, championship: updatedState.rows[0].championship, raceHistory: updatedState.rows[0].race_history};
-        res.json({success: true, win: win, attacker: { username: attackerUsername, car: attackerCar.name, power: Math.floor(attackerPower) }, defender: { username: defenderUsername, car: defenderCar.name, power: Math.floor(defenderPower) }, rewards: rewards, newState: newState});
+        const newState = {
+            resources: updatedState.rows[0].resources,
+            workshop: updatedState.rows[0].workshop,
+            ownedCars: updatedState.rows[0].owned_cars,
+            drivers: updatedState.rows[0].drivers,
+            currentDriver: updatedState.rows[0].current_driver,
+            sponsors: updatedState.rows[0].sponsors,
+            currentSponsor: updatedState.rows[0].current_sponsor,
+            technologies: updatedState.rows[0].technologies,
+            races: updatedState.rows[0].races,
+            championship: updatedState.rows[0].championship,
+            raceHistory: updatedState.rows[0].race_history
+        };
+        
+        res.json({
+            success: true,
+            win: win,
+            attacker: { username: attackerUsername, car: attackerCar.name, power: Math.floor(attackerPower) },
+            defender: { username: defenderUsername, car: defenderCar.name, power: Math.floor(defenderPower) },
+            rewards: rewards,
+            newState: newState
+        });
+        
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('Errore PvP:', error);
