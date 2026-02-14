@@ -29,6 +29,111 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 
+// =====================================================
+// FUNZIONI SICUREZZA
+// =====================================================
+
+// 1. VALIDAZIONE RIGOROSA RISORSE
+function validateResources(resources, previousResources) {
+    const MAX_VALUES = {
+        money: 100000000,
+        parts: 1000000,
+        reputation: 10000,
+        energy: 100
+    };
+    
+    const MAX_GAIN_PER_SAVE = {
+        money: 50000,
+        parts: 5000,
+        reputation: 500,
+        energy: 100
+    };
+    
+    for (const key of ['money', 'parts', 'reputation', 'energy']) {
+        const current = resources[key]?.value || 0;
+        const previous = previousResources[key]?.value || 0;
+        const gain = current - previous;
+        
+        if (current > MAX_VALUES[key]) {
+            return { valid: false, reason: `${key} troppo alto: ${current}` };
+        }
+        
+        if (gain > MAX_GAIN_PER_SAVE[key]) {
+            return { valid: false, reason: `Incremento ${key} sospetto: +${gain}` };
+        }
+        
+        if (current < 0) {
+            return { valid: false, reason: `${key} negativo` };
+        }
+    }
+    
+    return { valid: true };
+}
+
+// 2. VALIDAZIONE LOGICA GAMEPLAY
+function validateGameLogic(newState, oldState) {
+    if (newState.races?.wins > newState.races?.completed) {
+        return { valid: false, reason: 'Wins > completed races' };
+    }
+    
+    if (newState.workshop) {
+        for (const section of Object.values(newState.workshop)) {
+            if (section.level > 10) {
+                return { valid: false, reason: 'Workshop level > 10' };
+            }
+        }
+    }
+    
+    if (newState.trackTraining) {
+        for (const training of Object.values(newState.trackTraining)) {
+            if (training.level > 10) {
+                return { valid: false, reason: 'Training level > 10' };
+            }
+        }
+    }
+    
+    if (newState.ownedCars?.length > 50) {
+        return { valid: false, reason: 'Too many cars' };
+    }
+    
+    return { valid: true };
+}
+
+// 3. RATE LIMITING PER UTENTE
+const userSaveTimestamps = new Map();
+
+function checkUserRateLimit(userId) {
+    const now = Date.now();
+    const userHistory = userSaveTimestamps.get(userId) || [];
+    const recentSaves = userHistory.filter(t => now - t < 60000);
+    
+    if (recentSaves.length >= 30) {
+        return { allowed: false, reason: 'Too many saves per minute' };
+    }
+    
+    recentSaves.push(now);
+    userSaveTimestamps.set(userId, recentSaves);
+    return { allowed: true };
+}
+
+// 4. LOGGING ATTIVITÀ SOSPETTE
+async function logSuspiciousActivity(userId, reason, data) {
+    console.warn(`⚠️ SUSPICIOUS: User ${userId} - ${reason}`, data);
+    
+    try {
+        await pool.query(
+            'INSERT INTO suspicious_logs (user_id, reason, data, created_at) VALUES ($1, $2, $3, NOW())',
+            [userId, reason, JSON.stringify(data)]
+        );
+    } catch (err) {
+        // Ignora se tabella non esiste
+    }
+}
+
+// =====================================================
+// MIDDLEWARE AUTENTICAZIONE
+// =====================================================
+
 function authenticateToken(req, res, next) {
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -41,37 +146,43 @@ function authenticateToken(req, res, next) {
     });
 }
 
+// =====================================================
+// ENDPOINTS AUTENTICAZIONE
+// =====================================================
+
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         const passwordHash = await bcrypt.hash(password, 10);
         const result = await pool.query(
-            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email', 
+            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
             [username, email, passwordHash]
         );
         
-        // STATO INIZIALE v5.2
         const initialState = {
             resources: {
-                money: { value: 15000, rate: 0, max: 999999 }, 
-                parts: { value: 150, rate: 0, max: 999999 }, 
-                reputation: { value: 0, rate: 0, max: 10000 }, 
+                money: { value: 15000, rate: 0, max: 999999 },
+                parts: { value: 150, rate: 0, max: 999999 },
+                reputation: { value: 0, rate: 0, max: 10000 },
                 energy: { value: 100, rate: 0, max: 100 }
             },
             workshop: {
-                engine: { level: 0, unlocked: true }, 
-                electronics: { level: 0, unlocked: false }, 
-                body: { level: 0, unlocked: false }, 
+                engine: { level: 0, unlocked: true },
+                electronics: { level: 0, unlocked: false },
+                body: { level: 0, unlocked: false },
                 aerodynamics: { level: 0, unlocked: false }
             },
             ownedCars: [],
             drivers: [
-                { unlocked: true }, { unlocked: true }, { unlocked: false }, { unlocked: false }, { unlocked: false }
+                { unlocked: true }, { unlocked: true }, { unlocked: false },
+                { unlocked: false }, { unlocked: false }
             ],
             currentDriver: null,
             sponsors: [
-                { unlocked: true }, { unlocked: true }, { unlocked: false }, { unlocked: false }, { unlocked: false },
-                { unlocked: false }, { unlocked: false }, { unlocked: false }, { unlocked: false }, { unlocked: false }
+                { unlocked: true }, { unlocked: true }, { unlocked: false },
+                { unlocked: false }, { unlocked: false }, { unlocked: false },
+                { unlocked: false }, { unlocked: false }, { unlocked: false },
+                { unlocked: false }
             ],
             currentSponsor: null,
             technologies: [
@@ -80,10 +191,10 @@ app.post('/api/auth/register', async (req, res) => {
                 { id: 'suspension', researched: false }, { id: 'nitro', researched: false },
                 { id: 'weight', researched: false }, { id: 'cooling', researched: false }
             ],
-            races: { completed: 0, wins: 0, total: 0, lastRaceTime: 0, cooldown: 30000 },
+            races: { completed: 0, wins: 0, lastRaceTime: 0, cooldown: 30000 },
             championship: {
                 active: false, currentRace: 0, totalRaces: 5, wins: 0, results: [],
-                entryFee: 500, prizePool: 10000 // Riequilibrato
+                entryFee: 500, prizePool: 10000
             },
             raceHistory: [],
             trackTraining: {
@@ -173,6 +284,10 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// =====================================================
+// ENDPOINTS GAME STATE (CON VALIDAZIONE SICURA)
+// =====================================================
+
 app.get('/api/game/state', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM game_state WHERE user_id = $1', [req.user.userId]);
@@ -191,7 +306,10 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
             races: gs.races,
             championship: gs.championship,
             raceHistory: gs.race_history,
-            trackTraining: gs.track_training || { engine: {level:0}, electronics: {level:0}, body: {level:0}, aero: {level:0}, money: {level:0}, parts: {level:0} },
+            trackTraining: gs.track_training || {
+                engine: {level:0}, electronics: {level:0}, body: {level:0},
+                aero: {level:0}, money: {level:0}, parts: {level:0}
+            },
             trackQueue: gs.track_queue || null,
             missions: gs.missions || {},
             pvpStats: gs.pvp_stats || { wins: 0, losses: 0, total: 0 },
@@ -205,12 +323,63 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
     }
 });
 
+// ✅ ENDPOINT SALVATAGGIO CON VALIDAZIONE COMPLETA
 app.post('/api/game/state', authenticateToken, async (req, res) => {
     try {
         const { gameState } = req.body;
-        if (!gameState || typeof gameState !== 'object') return res.status(400).json({ error: 'Dati non validi' });
-        if (gameState.resources?.money?.value > 50000000) return res.status(400).json({ error: 'Valori sospetti' });
+        const userId = req.user.userId;
         
+        if (!gameState || typeof gameState !== 'object') {
+            return res.status(400).json({ error: 'Dati non validi' });
+        }
+        
+        // 1. Rate limiting per utente
+        const rateLimitCheck = checkUserRateLimit(userId);
+        if (!rateLimitCheck.allowed) {
+            await logSuspiciousActivity(userId, 'Rate limit exceeded', { saves: 30 });
+            return res.status(429).json({ error: 'Troppi salvataggi. Aspetta 1 minuto.' });
+        }
+        
+        // 2. Carica stato precedente
+        const previousResult = await pool.query(
+            'SELECT * FROM game_state WHERE user_id = $1',
+            [userId]
+        );
+        
+        if (previousResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Stato precedente non trovato' });
+        }
+        
+        const previousState = previousResult.rows[0];
+        
+        // 3. Validazione risorse
+        const resourceValidation = validateResources(
+            gameState.resources,
+            previousState.resources
+        );
+        
+        if (!resourceValidation.valid) {
+            await logSuspiciousActivity(userId, 'Resource validation failed', {
+                reason: resourceValidation.reason,
+                newMoney: gameState.resources.money?.value,
+                oldMoney: previousState.resources.money?.value,
+                newParts: gameState.resources.parts?.value,
+                oldParts: previousState.resources.parts?.value
+            });
+            return res.status(400).json({ error: 'Valori non validi: ' + resourceValidation.reason });
+        }
+        
+        // 4. Validazione logica gameplay
+        const logicValidation = validateGameLogic(gameState, previousState);
+        
+        if (!logicValidation.valid) {
+            await logSuspiciousActivity(userId, 'Logic validation failed', {
+                reason: logicValidation.reason
+            });
+            return res.status(400).json({ error: 'Dati incongruenti: ' + logicValidation.reason });
+        }
+        
+        // 5. Salva se tutto OK
         await pool.query(`
             UPDATE game_state SET
                 resources = $1, workshop = $2, owned_cars = $3, drivers = $4, current_driver = $5,
@@ -236,15 +405,20 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             JSON.stringify(gameState.pvpStats || {}),
             gameState.upgradesCount || 0,
             gameState.championshipsWon || 0,
-            req.user.userId
+            userId
         ]);
         
         res.json({ success: true, timestamp: Date.now() });
+        
     } catch (error) {
         console.error('Errore POST /api/game/state:', error);
         res.status(500).json({ error: 'Errore salvataggio' });
     }
 });
+
+// =====================================================
+// ENDPOINTS CLASSIFICHE
+// =====================================================
 
 app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     try {
@@ -324,6 +498,10 @@ app.get('/api/game/leaderboard-weekly', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Errore caricamento classifica settimanale' });
     }
 });
+
+// =====================================================
+// ENDPOINTS PVP
+// =====================================================
 
 app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
     const client = await pool.connect();
@@ -627,6 +805,10 @@ app.get('/api/pvp/can-challenge', authenticateToken, async (req, res) => {
     }
 });
 
+// =====================================================
+// RESET SETTIMANALE
+// =====================================================
+
 async function checkWeeklyReset() {
     try {
         const now = new Date();
@@ -711,13 +893,22 @@ async function checkWeeklyReset() {
 
 setInterval(checkWeeklyReset, 60000);
 
+// =====================================================
+// HEALTH CHECK
+// =====================================================
+
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// =====================================================
+// START SERVER
+// =====================================================
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📊 Database connected`);
     console.log(`🏆 Weekly reset scheduler active`);
+    console.log(`🔒 Security validations enabled`);
 });
