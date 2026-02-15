@@ -218,6 +218,7 @@ app.post('/api/auth/register', async (req, res) => {
             pvpStats: { wins: 0, losses: 0, total: 0 },
             upgradesCount: 0,
             championshipsWon: 0,
+            eventProgress: {},
             lastSaveTime: Date.now()
         };
         
@@ -226,8 +227,8 @@ app.post('/api/auth/register', async (req, res) => {
                 user_id, resources, workshop, owned_cars, drivers, current_driver,
                 sponsors, current_sponsor, technologies, races, championship, race_history,
                 track_training, track_queue, missions, pvp_stats, upgrades_count, championships_won,
-                reputation_weekly, last_save
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW())
+                event_progress, reputation_weekly, last_save
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
         `, [
             result.rows[0].id,
             JSON.stringify(initialState.resources),
@@ -245,7 +246,9 @@ app.post('/api/auth/register', async (req, res) => {
             JSON.stringify(initialState.trackQueue),
             JSON.stringify(initialState.missions),
             JSON.stringify(initialState.pvpStats),
-            0, 0, 0
+            0, 0,
+            JSON.stringify(initialState.eventProgress),
+            0
         ]);
         
         res.status(201).json({ message: 'Registrazione completata', user: result.rows[0] });
@@ -315,6 +318,7 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
             pvpStats: gs.pvp_stats || { wins: 0, losses: 0, total: 0 },
             upgradesCount: gs.upgrades_count || 0,
             championshipsWon: gs.championships_won || 0,
+            eventProgress: gs.event_progress || {},
             lastSaveTime: gs.last_save ? new Date(gs.last_save).getTime() : Date.now()
         });
     } catch (error) {
@@ -385,8 +389,8 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
                 resources = $1, workshop = $2, owned_cars = $3, drivers = $4, current_driver = $5,
                 sponsors = $6, current_sponsor = $7, technologies = $8, races = $9, championship = $10,
                 race_history = $11, track_training = $12, track_queue = $13, missions = $14,
-                pvp_stats = $15, upgrades_count = $16, championships_won = $17, last_save = NOW()
-            WHERE user_id = $18
+                pvp_stats = $15, upgrades_count = $16, championships_won = $17, event_progress = $18, last_save = NOW()
+            WHERE user_id = $19
         `, [
             JSON.stringify(gameState.resources),
             JSON.stringify(gameState.workshop),
@@ -405,6 +409,7 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             JSON.stringify(gameState.pvpStats || {}),
             gameState.upgradesCount || 0,
             gameState.championshipsWon || 0,
+            JSON.stringify(gameState.eventProgress || {}),
             userId
         ]);
         
