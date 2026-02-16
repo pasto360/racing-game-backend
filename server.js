@@ -914,6 +914,12 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📊 Database connected`);
-    console.log(`🏆 Weekly reset scheduler active`);
     console.log(`🔒 Security validations enabled`);
+    
+    // ✅ Attiva scheduler reset settimanale (ogni minuto controlla se è lunedì 08:00)
+    setInterval(checkWeeklyReset, 60000); // Ogni 60 secondi
+    console.log(`🏆 Weekly reset scheduler active`);
+    
+    // Esegui anche al boot per eventuali reset mancati
+    checkWeeklyReset();
 });
