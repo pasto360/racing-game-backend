@@ -30,6 +30,12 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 
 // =====================================================
+// MODULO BETA (routes separate - non modificare sopra)
+// =====================================================
+const betaRoutes = require('./server_beta');
+app.use('/api/beta', betaRoutes);
+
+// =====================================================
 // FUNZIONI SICUREZZA
 // =====================================================
 
