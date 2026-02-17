@@ -435,7 +435,7 @@ app.get('/api/game/leaderboard', authenticateToken, async (req, res) => {
     try {
         const allPlayers = await pool.query(`
             SELECT u.id as user_id, u.username,
-                   COALESCE((gs.resources->'reputation'->>'value')::int, 0) as reputation
+                   COALESCE((gs.resources->'reputation'->>'value')::bigint, 0) as reputation
             FROM game_state gs
             JOIN users u ON u.id = gs.user_id
             ORDER BY reputation DESC
@@ -663,10 +663,10 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
                 UPDATE game_state SET
                     resources = jsonb_set(
                         jsonb_set(
-                            jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb),
-                            '{parts,value}', ($2)::int::text::jsonb
+                            jsonb_set(resources, '{money,value}', ($1)::bigint::text::jsonb),
+                            '{parts,value}', ($2)::bigint::text::jsonb
                         ),
-                        '{reputation,value}', ($3)::int::text::jsonb
+                        '{reputation,value}', ($3)::bigint::text::jsonb
                     )
                 WHERE user_id = $4
             `, [newDefenderMoney, newDefenderParts, newDefenderRep, defenderId]);
@@ -676,12 +676,12 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
                     resources = jsonb_set(
                         jsonb_set(
                             jsonb_set(
-                                jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb),
-                                '{parts,value}', ($2)::int::text::jsonb
+                                jsonb_set(resources, '{money,value}', ($1)::bigint::text::jsonb),
+                                '{parts,value}', ($2)::bigint::text::jsonb
                             ),
-                            '{reputation,value}', ($3)::int::text::jsonb
+                            '{reputation,value}', ($3)::bigint::text::jsonb
                         ),
-                        '{energy,value}', ($4)::int::text::jsonb
+                        '{energy,value}', ($4)::bigint::text::jsonb
                     ),
                     reputation_weekly = COALESCE(reputation_weekly, 0) + $6
                 WHERE user_id = $5
@@ -705,12 +705,12 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
                     resources = jsonb_set(
                         jsonb_set(
                             jsonb_set(
-                                jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb),
-                                '{parts,value}', ($2)::int::text::jsonb
+                                jsonb_set(resources, '{money,value}', ($1)::bigint::text::jsonb),
+                                '{parts,value}', ($2)::bigint::text::jsonb
                             ),
-                            '{reputation,value}', ($3)::int::text::jsonb
+                            '{reputation,value}', ($3)::bigint::text::jsonb
                         ),
-                        '{energy,value}', ($4)::int::text::jsonb
+                        '{energy,value}', ($4)::bigint::text::jsonb
                     ),
                     reputation_weekly = GREATEST(0, COALESCE(reputation_weekly, 0) - $6)
                 WHERE user_id = $5
@@ -720,10 +720,10 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
                 UPDATE game_state SET
                     resources = jsonb_set(
                         jsonb_set(
-                            jsonb_set(resources, '{money,value}', ($1)::int::text::jsonb),
-                            '{parts,value}', ($2)::int::text::jsonb
+                            jsonb_set(resources, '{money,value}', ($1)::bigint::text::jsonb),
+                            '{parts,value}', ($2)::bigint::text::jsonb
                         ),
-                        '{reputation,value}', ($3)::int::text::jsonb
+                        '{reputation,value}', ($3)::bigint::text::jsonb
                     ),
                     reputation_weekly = COALESCE(reputation_weekly, 0) + $5
                 WHERE user_id = $4
@@ -894,8 +894,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::int + 5000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::int + 500)::text::jsonb)
+                            '{money,value}', ((resources->'money'->>'value')::bigint + 5000)::text::jsonb),
+                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 500)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[0].user_id]);
             }
@@ -903,8 +903,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::int + 3000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::int + 300)::text::jsonb)
+                            '{money,value}', ((resources->'money'->>'value')::bigint + 3000)::text::jsonb),
+                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 300)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[1].user_id]);
             }
@@ -912,8 +912,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::int + 1000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::int + 100)::text::jsonb)
+                            '{money,value}', ((resources->'money'->>'value')::bigint + 1000)::text::jsonb),
+                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 100)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[2].user_id]);
             }
