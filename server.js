@@ -817,17 +817,37 @@ app.get('/api/pvp/can-challenge', authenticateToken, async (req, res) => {
 async function checkWeeklyReset() {
     try {
         const now = new Date();
-        const isMonday = now.getDay() === 1;
-        const hour = now.getHours();
-        const minute = now.getMinutes();
         
-        if (isMonday && hour === 8 && minute === 0) {
-            console.log('🏆 Reset settimanale in corso...');
+        // Calcola numero settimana (ISO week number)
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const dayOfYear = Math.floor((now - startOfYear) / (24 * 60 * 60 * 1000));
+        const currentWeek = Math.floor(dayOfYear / 7);
+        
+        // Controlla ultimo reset fatto
+        const lastResetResult = await pool.query(`
+            SELECT last_reset_week FROM weekly_reset_tracker LIMIT 1
+        `);
+        
+        // Se non esiste, crea il record
+        if (lastResetResult.rows.length === 0) {
+            await pool.query(`
+                INSERT INTO weekly_reset_tracker (last_reset_week) VALUES ($1)
+            `, [currentWeek]);
+            console.log('✅ Tracker reset settimanale inizializzato');
+            return;
+        }
+        
+        const lastResetWeek = lastResetResult.rows[0].last_reset_week;
+        
+        // Se siamo in una nuova settimana, fai il reset
+        if (currentWeek > lastResetWeek) {
+            console.log(`🏆 Reset settimanale in corso... (settimana ${currentWeek})`);
             
             const top3Result = await pool.query(`
                 SELECT user_id, reputation_weekly, u.username
                 FROM game_state gs
                 JOIN users u ON u.id = gs.user_id
+                WHERE reputation_weekly > 0
                 ORDER BY reputation_weekly DESC
                 LIMIT 3
             `);
@@ -889,12 +909,94 @@ async function checkWeeklyReset() {
             }
             
             await pool.query('UPDATE game_state SET reputation_weekly = 0');
+            
+            // ✅ Aggiorna tracker settimana
+            await pool.query(`
+                UPDATE weekly_reset_tracker 
+                SET last_reset_week = $1, last_reset_date = NOW()
+            `, [currentWeek]);
+            
             console.log('✅ Reset settimanale completato');
         }
     } catch (error) {
         console.error('❌ Errore reset settimanale:', error);
     }
 }
+
+// =====================================================
+// ENDPOINT RESET MANUALE (ADMIN)
+// =====================================================
+
+app.post('/api/admin/reset-weekly', async (req, res) => {
+    try {
+        const { adminKey } = req.body;
+        
+        // Password admin (cambiala con una tua)
+        if (adminKey !== 'RESET_WEEKLY_2026') {
+            return res.status(403).json({ error: 'Accesso negato' });
+        }
+        
+        console.log('🔧 RESET MANUALE CLASSIFICA SETTIMANALE');
+        
+        // Salva top 3 prima di resettare
+        const top3Result = await pool.query(`
+            SELECT user_id, reputation_weekly, u.username
+            FROM game_state gs
+            JOIN users u ON u.id = gs.user_id
+            WHERE reputation_weekly > 0
+            ORDER BY reputation_weekly DESC
+            LIMIT 3
+        `);
+        
+        if (top3Result.rows.length > 0) {
+            const now = new Date();
+            const startOfYear = new Date(now.getFullYear(), 0, 1);
+            const dayOfYear = Math.floor((now - startOfYear) / (24 * 60 * 60 * 1000));
+            const currentWeek = Math.floor(dayOfYear / 7);
+            
+            await pool.query(`
+                INSERT INTO weekly_winners (week_number, first_place, second_place, third_place)
+                VALUES ($1, $2, $3, $4)
+            `, [
+                currentWeek,
+                top3Result.rows[0]?.username || null,
+                top3Result.rows[1]?.username || null,
+                top3Result.rows[2]?.username || null
+            ]);
+            
+            console.log('📝 Top 3 salvati:', top3Result.rows.map(r => r.username));
+        }
+        
+        // Reset tutti a 0
+        await pool.query('UPDATE game_state SET reputation_weekly = 0');
+        
+        // Aggiorna tracker
+        const now = new Date();
+        const startOfYear = new Date(now.getFullYear(), 0, 1);
+        const dayOfYear = Math.floor((now - startOfYear) / (24 * 60 * 60 * 1000));
+        const currentWeek = Math.floor(dayOfYear / 7);
+        
+        await pool.query(`
+            INSERT INTO weekly_reset_tracker (last_reset_week, last_reset_date)
+            VALUES ($1, NOW())
+            ON CONFLICT (id) DO UPDATE SET 
+                last_reset_week = $1, 
+                last_reset_date = NOW()
+        `, [currentWeek]);
+        
+        console.log('✅ Reset manuale completato');
+        
+        res.json({ 
+            success: true, 
+            message: 'Classifica resettata',
+            top3: top3Result.rows.map(r => ({ username: r.username, reputation: r.reputation_weekly }))
+        });
+        
+    } catch (error) {
+        console.error('❌ Errore reset manuale:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
 
 setInterval(checkWeeklyReset, 60000);
 
