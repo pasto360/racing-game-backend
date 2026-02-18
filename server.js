@@ -389,13 +389,20 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Dati incongruenti: ' + logicValidation.reason });
         }
         
+        // ✅ Calcola delta reputazione per classifica settimanale
+        const oldRep = parseInt(previousState.resources.reputation?.value) || 0;
+        const newRep = parseInt(gameState.resources.reputation?.value) || 0;
+        const repGained = Math.max(0, newRep - oldRep); // Solo guadagni, non perdite
+        
         // 5. Salva se tutto OK
         await pool.query(`
             UPDATE game_state SET
                 resources = $1, workshop = $2, owned_cars = $3, drivers = $4, current_driver = $5,
                 sponsors = $6, current_sponsor = $7, technologies = $8, races = $9, championship = $10,
                 race_history = $11, track_training = $12, track_queue = $13, missions = $14,
-                pvp_stats = $15, upgrades_count = $16, championships_won = $17, event_progress = $18, last_save = NOW()
+                pvp_stats = $15, upgrades_count = $16, championships_won = $17, event_progress = $18,
+                reputation_weekly = COALESCE(reputation_weekly, 0) + $20,
+                last_save = NOW()
             WHERE user_id = $19
         `, [
             JSON.stringify(gameState.resources),
@@ -416,7 +423,8 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             gameState.upgradesCount || 0,
             gameState.championshipsWon || 0,
             JSON.stringify(gameState.eventProgress || {}),
-            userId
+            userId,
+            repGained // ✅ $20 - Aggiunge delta reputazione alla classifica settimanale
         ]);
         
         res.json({ success: true, timestamp: Date.now() });
