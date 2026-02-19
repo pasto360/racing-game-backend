@@ -11,12 +11,6 @@ const path = require('path');
 let authenticateToken = null;
 let pool = null;
 
-// Funzione per ricevere dipendenze
-router.setDependencies = (authFn, dbPool) => {
-    authenticateToken = authFn;
-    pool = dbPool;
-};
-
 // Carica circuiti
 const circuitsPath = path.join(__dirname, 'beta_circuits.json');
 let circuits = [];
@@ -187,3 +181,8 @@ router.post('/run-simulation', (req, res, next) => {
 });
 
 module.exports = router;
+module.exports.setDependencies = (authFn, dbPool) => {
+    authenticateToken = authFn;
+    pool = dbPool;
+};
+
