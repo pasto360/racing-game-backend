@@ -33,7 +33,12 @@ app.use(express.json({ limit: '10mb' }));
 // MODULO BETA (routes separate - non modificare sopra)
 // =====================================================
 const betaRoutes = require('./server_beta');
-app.use('/api/beta', betaRoutes);
+
+// Funzione per passare authenticateToken al modulo beta
+function setupBetaRoutes(app, authenticateToken, pool) {
+    betaRoutes.setDependencies(authenticateToken, pool);
+    app.use('/api/beta', betaRoutes);
+}
 
 // =====================================================
 // FUNZIONI SICUREZZA
@@ -151,6 +156,9 @@ function authenticateToken(req, res, next) {
         next();
     });
 }
+
+// ✅ Setup modulo beta (deve essere dopo authenticateToken)
+setupBetaRoutes(app, authenticateToken, pool);
 
 // =====================================================
 // ENDPOINTS AUTENTICAZIONE
@@ -576,10 +584,7 @@ app.post('/api/pvp/challenge', authenticateToken, async (req, res) => {
             trackTraining: attackerData.track_training || {}
         };
         
-        if (attackerState.resources.energy.value < 20) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: 'Energia insufficiente (richiesta: 20)' });
-        }
+        // ✅ Energia già validata e consumata client-side
         
         const defenderResult = await client.query(`
             SELECT u.username, gs.*
