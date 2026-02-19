@@ -7,6 +7,16 @@ const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 
+// Dipendenze iniettate dal server principale
+let authenticateToken = null;
+let pool = null;
+
+// Funzione per ricevere dipendenze
+router.setDependencies = (authFn, dbPool) => {
+    authenticateToken = authFn;
+    pool = dbPool;
+};
+
 // Carica circuiti
 const circuitsPath = path.join(__dirname, 'beta_circuits.json');
 let circuits = [];
@@ -28,7 +38,10 @@ const getWeeklyCircuit = () => {
 // GET /api/beta/weekly-challenge
 // Ritorna circuito + stato utente
 // =====================================================
-router.get('/weekly-challenge', async (req, res) => {
+router.get('/weekly-challenge', (req, res, next) => {
+    if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
+    authenticateToken(req, res, next);
+}, async (req, res) => {
     try {
         const userId = req.user?.userId;
         const circuit = getWeeklyCircuit();
@@ -53,7 +66,10 @@ router.get('/weekly-challenge', async (req, res) => {
 // POST /api/beta/run-simulation
 // Esegue simulazione e salva risultato
 // =====================================================
-router.post('/run-simulation', async (req, res) => {
+router.post('/run-simulation', (req, res, next) => {
+    if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
+    authenticateToken(req, res, next);
+}, async (req, res) => {
     try {
         const userId = req.user?.userId;
         const { carIndex, setup } = req.body;
