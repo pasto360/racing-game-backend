@@ -36,8 +36,10 @@ const betaRoutes = require('./server_beta');
 
 // Funzione per passare authenticateToken al modulo beta
 function setupBetaRoutes(app, authenticateToken, pool) {
+    console.log("🧪 Setup beta routes...");
     betaRoutes.setDependencies(authenticateToken, pool);
     app.use('/api/beta', betaRoutes);
+    console.log("✅ Beta routes montate su /api/beta");
 }
 
 // =====================================================
