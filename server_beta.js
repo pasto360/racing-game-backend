@@ -15,9 +15,12 @@ let pool = null;
 const circuitsPath = path.join(__dirname, 'beta_circuits.json');
 let circuits = [];
 try {
-    circuits = JSON.parse(fs.readFileSync(circuitsPath, 'utf8')).circuits;
+    const fileContent = fs.readFileSync(circuitsPath, 'utf8');
+    circuits = JSON.parse(fileContent).circuits;
+    console.log('✅ Circuiti beta caricati:', circuits.length);
 } catch (error) {
-    console.error('❌ Errore caricamento circuiti:', error);
+    console.error('❌ Errore caricamento circuiti:', error.message);
+    console.error('Path cercato:', circuitsPath);
 }
 
 // Funzione per ottenere circuito settimanale
@@ -25,6 +28,7 @@ const getWeeklyCircuit = () => {
     const now = new Date();
     const weekNumber = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
     const index = weekNumber % circuits.length;
+    console.log('📅 Settimana:', weekNumber, '- Circuito:', circuits[index]?.name);
     return circuits[index];
 };
 
@@ -33,15 +37,24 @@ const getWeeklyCircuit = () => {
 // Ritorna circuito + stato utente
 // =====================================================
 router.get('/weekly-challenge', (req, res, next) => {
-    if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
+    console.log('🏁 GET /api/beta/weekly-challenge chiamato');
+    if (!authenticateToken) {
+        console.error('❌ authenticateToken non inizializzato!');
+        return res.status(500).json({ error: 'Auth not initialized' });
+    }
     authenticateToken(req, res, next);
 }, async (req, res) => {
+    console.log('🏁 weekly-challenge autenticato, userId:', req.user?.userId);
     try {
         const userId = req.user?.userId;
         const circuit = getWeeklyCircuit();
 
-        // TODO: Query DB per hasRaced, result, leaderboard
-        // Per MVP ritorna dati mock
+        if (!circuit) {
+            console.error('❌ Nessun circuito disponibile!');
+            return res.status(500).json({ error: 'Circuiti non caricati' });
+        }
+
+        console.log('✅ Invio circuito:', circuit.name);
         
         res.json({
             circuit,
@@ -51,7 +64,7 @@ router.get('/weekly-challenge', (req, res, next) => {
         });
 
     } catch (error) {
-        console.error('Errore weekly-challenge:', error);
+        console.error('❌ Errore weekly-challenge:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -61,12 +74,15 @@ router.get('/weekly-challenge', (req, res, next) => {
 // Esegue simulazione e salva risultato
 // =====================================================
 router.post('/run-simulation', (req, res, next) => {
+    console.log('🏁 POST /api/beta/run-simulation chiamato');
     if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
     authenticateToken(req, res, next);
 }, async (req, res) => {
     try {
         const userId = req.user?.userId;
         const { carIndex, setup } = req.body;
+        
+        console.log('🏁 Simulazione per userId:', userId, 'setup:', setup);
         
         // Carica game state utente (simulato per MVP)
         const car = { stats: { engine: 100, body: 80, electronics: 70, aero: 60 } };
@@ -167,7 +183,7 @@ router.post('/run-simulation', (req, res, next) => {
             reward
         };
         
-        // TODO: Salva in DB
+        console.log('✅ Simulazione completata - Pos:', position, 'DNF:', dnf);
         
         res.json({
             result,
@@ -175,14 +191,14 @@ router.post('/run-simulation', (req, res, next) => {
         });
         
     } catch (error) {
-        console.error('Errore run-simulation:', error);
+        console.error('❌ Errore run-simulation:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
 module.exports = router;
 module.exports.setDependencies = (authFn, dbPool) => {
+    console.log('🔧 setDependencies chiamato');
     authenticateToken = authFn;
     pool = dbPool;
 };
-
