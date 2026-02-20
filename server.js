@@ -36,10 +36,10 @@ const betaRoutes = require('./server_beta');
 
 // Funzione per passare authenticateToken al modulo beta
 function setupBetaRoutes(app, authenticateToken, pool) {
-    console.log("🧪 Setup beta routes...");
+    console.log('🧪 Setup beta routes...');
     betaRoutes.setDependencies(authenticateToken, pool);
     app.use('/api/beta', betaRoutes);
-    console.log("✅ Beta routes montate su /api/beta");
+    console.log('✅ Beta routes montate su /api/beta');
 }
 
 // =====================================================
@@ -891,8 +891,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::bigint + 5000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 500)::text::jsonb)
+                            '{money,value}', (FLOOR((resources->'money'->>'value')::numeric)::bigint + 5000)::text::jsonb),
+                            '{reputation,value}', (FLOOR((resources->'reputation'->>'value')::numeric)::bigint + 500)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[0].user_id]);
             }
@@ -900,8 +900,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::bigint + 3000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 300)::text::jsonb)
+                            '{money,value}', (FLOOR((resources->'money'->>'value')::numeric)::bigint + 3000)::text::jsonb),
+                            '{reputation,value}', (FLOOR((resources->'reputation'->>'value')::numeric)::bigint + 300)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[1].user_id]);
             }
@@ -909,8 +909,8 @@ async function doWeeklyReset(weekTimestamp) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(jsonb_set(resources,
-                            '{money,value}', ((resources->'money'->>'value')::bigint + 1000)::text::jsonb),
-                            '{reputation,value}', ((resources->'reputation'->>'value')::bigint + 100)::text::jsonb)
+                            '{money,value}', (FLOOR((resources->'money'->>'value')::numeric)::bigint + 1000)::text::jsonb),
+                            '{reputation,value}', (FLOOR((resources->'reputation'->>'value')::numeric)::bigint + 100)::text::jsonb)
                     WHERE user_id = $1
                 `, [top3Result.rows[2].user_id]);
             }
