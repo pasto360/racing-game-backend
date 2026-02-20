@@ -1,204 +1,457 @@
 // =====================================================
-// SERVER_BETA.JS - API Simulatore (MVP)
+// BETA.JS - Simulatore Gara (MVP)
 // =====================================================
 
-const express = require('express');
-const router = express.Router();
-const fs = require('fs');
-const path = require('path');
+const BetaModule = (() => {
 
-// Dipendenze iniettate dal server principale
-let authenticateToken = null;
-let pool = null;
+    const getApiUrl = () => {
+        // Usa API_URL globale dal gioco principale (già configurato in index.html)
+        return window.API_URL || 'http://localhost:3000';
+    };
 
-// Carica circuiti
-const circuitsPath = path.join(__dirname, 'beta_circuits.json');
-let circuits = [];
-try {
-    const fileContent = fs.readFileSync(circuitsPath, 'utf8');
-    circuits = JSON.parse(fileContent).circuits;
-    console.log('✅ Circuiti beta caricati:', circuits.length);
-} catch (error) {
-    console.error('❌ Errore caricamento circuiti:', error.message);
-    console.error('Path cercato:', circuitsPath);
-}
-
-// Funzione per ottenere circuito settimanale
-const getWeeklyCircuit = () => {
-    const now = new Date();
-    const weekNumber = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
-    const index = weekNumber % circuits.length;
-    console.log('📅 Settimana:', weekNumber, '- Circuito:', circuits[index]?.name);
-    return circuits[index];
-};
-
-// =====================================================
-// GET /api/beta/weekly-challenge
-// Ritorna circuito + stato utente
-// =====================================================
-router.get('/weekly-challenge', (req, res, next) => {
-    console.log('🏁 GET /api/beta/weekly-challenge chiamato');
-    if (!authenticateToken) {
-        console.error('❌ authenticateToken non inizializzato!');
-        return res.status(500).json({ error: 'Auth not initialized' });
-    }
-    authenticateToken(req, res, next);
-}, async (req, res) => {
-    console.log('🏁 weekly-challenge autenticato, userId:', req.user?.userId);
-    try {
-        const userId = req.user?.userId;
-        const circuit = getWeeklyCircuit();
-
-        if (!circuit) {
-            console.error('❌ Nessun circuito disponibile!');
-            return res.status(500).json({ error: 'Circuiti non caricati' });
-        }
-
-        console.log('✅ Invio circuito:', circuit.name);
-        
-        res.json({
-            circuit,
-            hasRaced: false,
-            result: null,
-            leaderboard: []
+    const api = async (endpoint, options = {}) => {
+        const token = window.authToken || localStorage.getItem('authToken');
+        const response = await fetch(`${getApiUrl()}/api/beta/${endpoint}`, {
+            ...options,
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                ...(options.headers || {})
+            }
         });
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        return response.json();
+    };
 
-    } catch (error) {
-        console.error('❌ Errore weekly-challenge:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
+    let state = {
+        circuit: null,
+        selectedCar: null,
+        setup: {
+            tires: 'medium',
+            downforce: 50,
+            fuel: 50,
+            tirePressure: 2.2,
+            suspension: 0,
+            gearRatio: 'medium',
+            brakeBias: 55,
+            engineMap: 'balanced'
+        },
+        attemptsUsed: 0, // 0-3 tentativi giornalieri
+        results: [], // Array risultati (max 3)
+        leaderboard: []
+    };
 
-// =====================================================
-// POST /api/beta/run-simulation
-// Esegue simulazione e salva risultato
-// =====================================================
-router.post('/run-simulation', (req, res, next) => {
-    console.log('🏁 POST /api/beta/run-simulation chiamato');
-    if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
-    authenticateToken(req, res, next);
-}, async (req, res) => {
-    try {
-        const userId = req.user?.userId;
-        const { carIndex, setup } = req.body;
-        
-        console.log('🏁 Simulazione per userId:', userId, 'setup:', setup);
-        
-        // Carica game state utente (simulato per MVP)
-        const car = { stats: { engine: 100, body: 80, electronics: 70, aero: 60 } };
-        const power = 350; // Simulato
-        
-        const circuit = getWeeklyCircuit();
-        
-        // =====================================================
-        // CALCOLO FISICA (semplificato MVP)
-        // =====================================================
-        
-        const baseWeight = 1000 + (car.stats.body * 2);
-        const totalWeight = baseWeight + setup.fuel;
-        
-        // Velocità max
-        let maxSpeed = (power / totalWeight) * 200;
-        maxSpeed -= setup.downforce * 0.5;
-        if (setup.gearRatio === 'short') maxSpeed -= 10;
-        if (setup.gearRatio === 'long') maxSpeed += 10;
-        
-        // Grip
-        let grip = 1.0;
-        if (setup.tires === 'soft') grip = 1.05;
-        if (setup.tires === 'hard') grip = 0.98;
-        grip += (2.2 - setup.tirePressure) * 0.05;
-        
-        // Consumo carburante/giro
-        let fuelPerLap = 2.5;
-        fuelPerLap += circuit.tightCorners * 0.15;
-        fuelPerLap += setup.downforce * 0.02;
-        if (setup.tires === 'soft') fuelPerLap *= 1.1;
-        
-        // Degrado gomme/giro
-        let tireWearPerLap = 0.003;
-        if (setup.tires === 'soft') tireWearPerLap = 0.005;
-        if (setup.tires === 'hard') tireWearPerLap = 0.002;
-        tireWearPerLap += circuit.tightCorners * 0.0005;
-        
-        // Simula gara
-        let totalTime = 0;
-        let bestLap = 999;
-        let fuel = setup.fuel;
-        let tireWear = 0;
-        let dnf = false;
-        let dnfLap = 0;
-        
-        for (let lap = 1; lap <= circuit.laps; lap++) {
-            // Check carburante
-            if (fuel < fuelPerLap) {
-                dnf = true;
-                dnfLap = lap;
-                break;
+    const render = async (container, gameInstance) => {
+        try {
+            // ✅ Ricarica dati solo se non abbiamo già un risultato
+            if (!state.hasRaced || !state.circuit) {
+                const data = await api('weekly-challenge');
+                
+                state.circuit = data.circuit;
+                state.hasRaced = data.hasRaced;
+                state.result = data.result;
+                state.leaderboard = data.leaderboard;
             }
-            
-            // Calcola tempo giro
-            const currentGrip = grip * (1 - tireWear);
-            const currentWeight = baseWeight + fuel;
-            
-            let lapTime = 60 + Math.random() * 5; // Base 60-65 sec
-            lapTime *= (circuit.length / 5000); // Scala per lunghezza
-            lapTime *= (1200 / currentWeight); // Peso
-            lapTime *= (1 / currentGrip); // Grip
-            lapTime += (100 - setup.downforce) * 0.05; // Deportanza in curve
-            lapTime -= maxSpeed * 0.01; // Velocità in rettilineo
-            
-            // Penalità dossi
-            if (circuit.bumps >= 3 && setup.suspension === -30) {
-                lapTime += 0.5;
+
+            if (gameInstance.ownedCars && gameInstance.ownedCars.length > 0 && !state.selectedCar) {
+                state.selectedCar = gameInstance.ownedCars[0];
             }
+
+            container.innerHTML = `
+                ${renderCircuit()}
+                ${!state.hasRaced ? renderSetup(gameInstance) : ''}
+                ${state.hasRaced && state.result ? renderResults() : ''}
+                ${renderLeaderboard()}
+            `;
             
-            totalTime += lapTime;
-            if (lapTime < bestLap) bestLap = lapTime;
-            
-            // Consuma
-            fuel -= fuelPerLap;
-            tireWear += tireWearPerLap;
+            console.log('📊 Stato render - hasRaced:', state.hasRaced, 'result:', !!state.result);
+
+            attachListeners(gameInstance);
+
+        } catch (error) {
+            console.error('Errore:', error);
+            container.innerHTML = `
+                <div class="beta-empty">
+                    <span class="beta-icon">❌</span>
+                    <h3>Errore Caricamento</h3>
+                    <p>${error.message}</p>
+                </div>
+            `;
         }
-        
-        // Calcola posizione (mock - servirebbe DB)
-        const position = Math.floor(Math.random() * 50) + 1;
-        
-        // Premi
-        let reward = { money: 0, parts: 0 };
-        if (!dnf) {
-            if (position === 1) reward = { money: 50000, parts: 1000 };
-            else if (position === 2) reward = { money: 30000, parts: 600 };
-            else if (position === 3) reward = { money: 15000, parts: 300 };
-            else if (position <= 10) reward = { money: 5000, parts: 100 };
-            else if (position <= 50) reward = { money: 1000, parts: 50 };
+    };
+
+    const renderCircuit = () => {
+        const c = state.circuit;
+        if (!c) return '';
+
+        return `
+            <div class="circuit-header">
+                <div class="circuit-name">🏁 ${c.name}</div>
+                <div class="circuit-country">${c.country}</div>
+                <p style="color: rgba(255,255,255,0.7); font-style: italic;">${c.description}</p>
+                
+                <div class="circuit-stats">
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Lunghezza</div>
+                        <div class="circuit-stat-value">${(c.length / 1000).toFixed(1)} km</div>
+                    </div>
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Giri</div>
+                        <div class="circuit-stat-value">${c.laps}</div>
+                    </div>
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Curve Strette</div>
+                        <div class="circuit-stat-value">${c.tightCorners} 🔴</div>
+                    </div>
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Curve Medie</div>
+                        <div class="circuit-stat-value">${c.mediumCorners} 🟡</div>
+                    </div>
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Curve Veloci</div>
+                        <div class="circuit-stat-value">${c.fastCorners} 🟢</div>
+                    </div>
+                    <div class="circuit-stat">
+                        <div class="circuit-stat-label">Rettilinei</div>
+                        <div class="circuit-stat-value">${c.longStraights + c.shortStraights}</div>
+                    </div>
+                </div>
+
+                ${state.attemptsUsed < 3 ? `
+                    <div style="margin-top: 20px; padding: 15px; background: rgba(0,217,255,0.1); border-radius: 8px; border-left: 4px solid #00d9ff;">
+                        <strong style="color: #00d9ff;">🏁 Tentativi: ${3 - state.attemptsUsed}/3 disponibili</strong><br>
+                        <span style="color: rgba(255,255,255,0.7); font-size: 0.9rem;">
+                            Reset giornaliero. Vale il miglior tempo!
+                        </span>
+                    </div>
+                ` : `
+                    <div style="margin-top: 20px; padding: 15px; background: rgba(255,69,0,0.1); border-radius: 8px; border-left: 4px solid #ff4500;">
+                        <strong style="color: #ff4500;">❌ Tentativi esauriti (3/3)</strong><br>
+                        <span style="color: rgba(255,255,255,0.7); font-size: 0.9rem;">
+                            Nuovi tentativi domani
+                        </span>
+                    </div>
+                `}
+            </div>
+        `;
+    };
+
+    const renderSetup = (game) => {
+        if (!game.ownedCars || game.ownedCars.length === 0) {
+            return '<div class="setup-section"><p style="text-align:center;color:rgba(255,255,255,0.5);">⚠️ Serve almeno un\'auto</p></div>';
         }
-        
-        const result = {
-            totalTime: dnf ? 0 : totalTime,
-            bestLap,
-            position,
-            dnf,
-            dnfLap,
-            reward
+
+        const car = state.selectedCar;
+        const power = game.getCarPower(car);
+
+        return `
+            <div class="setup-section">
+                <div class="setup-title">🏎️ Auto</div>
+                
+                <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
+                    <select id="car-selector" style="width: 100%; padding: 12px; background: rgba(255,255,255,0.1); color: #fff; border: 2px solid rgba(0,217,255,0.3); border-radius: 8px; font-family: Orbitron; font-size: 1rem; cursor: pointer;">
+                        ${game.ownedCars.map((c, i) => `
+                            <option value="${i}" ${c === car ? 'selected' : ''} style="background: #1a1a1a; color: #fff;">
+                                ${c.name} - ${game.getCarPower(c)} HP
+                            </option>
+                        `).join('')}
+                    </select>
+                    <div style="margin-top: 15px; padding: 15px; background: rgba(0,217,255,0.1); border-radius: 8px; text-align: center;">
+                        <div style="font-family: Orbitron; font-size: 1.5rem; color: #ffa500; margin-bottom: 5px;">
+                            ${car.name}
+                        </div>
+                        <div style="color: rgba(255,255,255,0.7);">
+                            ${power} HP • ${1000 + (car.stats.body * 2)} kg
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setup-title">⚙️ Setup</div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>🏁 Gomme</span>
+                    </div>
+                    <div class="setup-radio-group">
+                        <div class="setup-radio">
+                            <input type="radio" name="tires" id="tires-hard" value="hard" ${state.setup.tires === 'hard' ? 'checked' : ''}>
+                            <label for="tires-hard">Dure</label>
+                        </div>
+                        <div class="setup-radio">
+                            <input type="radio" name="tires" id="tires-medium" value="medium" ${state.setup.tires === 'medium' ? 'checked' : ''}>
+                            <label for="tires-medium">Medie</label>
+                        </div>
+                        <div class="setup-radio">
+                            <input type="radio" name="tires" id="tires-soft" value="soft" ${state.setup.tires === 'soft' ? 'checked' : ''}>
+                            <label for="tires-soft">Morbide</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>✈️ Deportanza</span>
+                        <span id="downforce-val">${state.setup.downforce}%</span>
+                    </div>
+                    <input type="range" class="setup-slider" id="downforce" min="0" max="100" value="${state.setup.downforce}">
+                </div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>⛽ Carburante</span>
+                        <span id="fuel-val">${state.setup.fuel} L</span>
+                    </div>
+                    <input type="range" class="setup-slider" id="fuel" min="20" max="100" value="${state.setup.fuel}">
+                </div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>💨 Pressione</span>
+                        <span id="pressure-val">${state.setup.tirePressure} bar</span>
+                    </div>
+                    <input type="range" class="setup-slider" id="pressure" min="1.8" max="2.5" step="0.1" value="${state.setup.tirePressure}">
+                </div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>🔧 Sospensioni</span>
+                        <span id="suspension-val">${state.setup.suspension > 0 ? '+' : ''}${state.setup.suspension} mm</span>
+                    </div>
+                    <input type="range" class="setup-slider" id="suspension" min="-30" max="30" step="10" value="${state.setup.suspension}">
+                </div>
+
+                <div class="setup-param">
+                    <div class="setup-param-label">
+                        <span>⚙️ Rapporto</span>
+                    </div>
+                    <div class="setup-radio-group">
+                        <div class="setup-radio">
+                            <input type="radio" name="gear" id="gear-short" value="short" ${state.setup.gearRatio === 'short' ? 'checked' : ''}>
+                            <label for="gear-short">Corto</label>
+                        </div>
+                        <div class="setup-radio">
+                            <input type="radio" name="gear" id="gear-medium" value="medium" ${state.setup.gearRatio === 'medium' ? 'checked' : ''}>
+                            <label for="gear-medium">Medio</label>
+                        </div>
+                        <div class="setup-radio">
+                            <input type="radio" name="gear" id="gear-long" value="long" ${state.setup.gearRatio === 'long' ? 'checked' : ''}>
+                            <label for="gear-long">Lungo</label>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="simulate-btn" id="run-btn">🏁 AVVIA SIMULAZIONE</button>
+            </div>
+        `;
+    };
+
+    const renderResults = () => {
+        const r = state.result;
+        if (!r) return '';
+
+        const formatTime = (s) => {
+            const m = Math.floor(s / 60);
+            const sec = (s % 60).toFixed(3);
+            return `${m}:${sec.padStart(6, '0')}`;
         };
-        
-        console.log('✅ Simulazione completata - Pos:', position, 'DNF:', dnf);
-        
-        res.json({
-            result,
-            leaderboard: [] // TODO: Query DB
-        });
-        
-    } catch (error) {
-        console.error('❌ Errore run-simulation:', error);
-        res.status(500).json({ error: error.message });
-    }
-});
 
-module.exports = router;
-module.exports.setDependencies = (authFn, dbPool) => {
-    console.log('🔧 setDependencies chiamato');
-    authenticateToken = authFn;
-    pool = dbPool;
-};
+        return `
+            <div class="results-container">
+                <div class="results-title">🏁 RISULTATO FINALE</div>
+                <div class="results-main">
+                    <div class="result-stat">
+                        <div class="result-stat-label">Tempo Totale</div>
+                        <div class="result-stat-value">${r.dnf ? 'DNF' : formatTime(r.totalTime)}</div>
+                    </div>
+                    <div class="result-stat">
+                        <div class="result-stat-label">Miglior Giro</div>
+                        <div class="result-stat-value">${formatTime(r.bestLap)}</div>
+                    </div>
+                    <div class="result-stat">
+                        <div class="result-stat-label">Posizione</div>
+                        <div class="result-stat-value">${r.position}°</div>
+                    </div>
+                    <div class="result-stat">
+                        <div class="result-stat-label">Premio</div>
+                        <div class="result-stat-value" style="font-size: 1.2rem;">
+                            ${r.reward.money > 0 ? `💰 ${r.reward.money.toLocaleString()}<br>` : ''}
+                            ${r.reward.parts > 0 ? `🔩 ${r.reward.parts.toLocaleString()}` : ''}
+                            ${r.reward.money === 0 && r.reward.parts === 0 ? '-' : ''}
+                        </div>
+                    </div>
+                </div>
+                ${r.dnf ? `
+                    <div style="background: rgba(255,69,0,0.2); border: 2px solid #ff4500; border-radius: 8px; padding: 20px; text-align: center; margin-top: 20px;">
+                        <div style="font-size: 2rem; margin-bottom: 10px;">❌</div>
+                        <div style="font-family: Orbitron; font-size: 1.3rem; color: #ff4500; margin-bottom: 5px;">DNF - NON CLASSIFICATO</div>
+                        <div style="color: rgba(255,255,255,0.7);">Carburante esaurito al giro ${r.dnfLap}/${state.circuit.laps}</div>
+                    </div>
+                ` : ''}
+            </div>
+        `;
+    };
+
+    const renderLeaderboard = () => {
+        if (!state.leaderboard || state.leaderboard.length === 0) {
+            return '<div class="leaderboard"><div class="leaderboard-title">🏆 Classifica</div><p style="text-align:center;color:rgba(255,255,255,0.5);padding:40px;">Nessun risultato</p></div>';
+        }
+
+        const formatTime = (s) => {
+            const m = Math.floor(s / 60);
+            const sec = (s % 60).toFixed(3);
+            return `${m}:${sec.padStart(6, '0')}`;
+        };
+
+        const userId = window.game?.userId;
+
+        return `
+            <div class="leaderboard">
+                <div class="leaderboard-title">🏆 Classifica Mondiale</div>
+                ${state.leaderboard.slice(0, 20).map((e, i) => {
+                    const pos = i + 1;
+                    const isCurrent = e.userId === userId;
+                    let icon = pos;
+                    if (pos === 1) icon = '🥇';
+                    else if (pos === 2) icon = '🥈';
+                    else if (pos === 3) icon = '🥉';
+
+                    return `
+                        <div class="leaderboard-entry ${isCurrent ? 'current-user' : ''}">
+                            <div class="leaderboard-position">${icon}</div>
+                            <div class="leaderboard-username">${e.username} ${isCurrent ? '(Tu)' : ''}</div>
+                            <div class="leaderboard-time">${formatTime(e.totalTime)}</div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    };
+
+    const attachListeners = (game) => {
+        // Car selector
+        const carSelector = document.getElementById('car-selector');
+        if (carSelector) {
+            console.log('✅ Selector auto trovato');
+            carSelector.addEventListener('change', (e) => {
+                const newIndex = parseInt(e.target.value);
+                state.selectedCar = game.ownedCars[newIndex];
+                console.log('🚗 Auto cambiata:', state.selectedCar.name);
+                // Re-render per aggiornare stats
+                render(document.getElementById('betaContainer'), game);
+            });
+        }
+
+        // Sliders
+        const downforce = document.getElementById('downforce');
+        if (downforce) {
+            downforce.addEventListener('input', (e) => {
+                state.setup.downforce = parseInt(e.target.value);
+                document.getElementById('downforce-val').textContent = `${state.setup.downforce}%`;
+            });
+        }
+
+        const fuel = document.getElementById('fuel');
+        if (fuel) {
+            fuel.addEventListener('input', (e) => {
+                state.setup.fuel = parseInt(e.target.value);
+                document.getElementById('fuel-val').textContent = `${state.setup.fuel} L`;
+            });
+        }
+
+        const pressure = document.getElementById('pressure');
+        if (pressure) {
+            pressure.addEventListener('input', (e) => {
+                state.setup.tirePressure = parseFloat(e.target.value);
+                document.getElementById('pressure-val').textContent = `${state.setup.tirePressure} bar`;
+            });
+        }
+
+        const suspension = document.getElementById('suspension');
+        if (suspension) {
+            suspension.addEventListener('input', (e) => {
+                state.setup.suspension = parseInt(e.target.value);
+                const sign = state.setup.suspension > 0 ? '+' : '';
+                document.getElementById('suspension-val').textContent = `${sign}${state.setup.suspension} mm`;
+            });
+        }
+
+        // Radio
+        document.querySelectorAll('input[name="tires"]').forEach(r => {
+            r.addEventListener('change', (e) => state.setup.tires = e.target.value);
+        });
+
+        document.querySelectorAll('input[name="gear"]').forEach(r => {
+            r.addEventListener('change', (e) => state.setup.gearRatio = e.target.value);
+        });
+
+        // Run button
+        const btn = document.getElementById('run-btn');
+        if (btn) {
+            console.log('✅ Pulsante simulazione trovato, attacco listener');
+            btn.addEventListener('click', () => {
+                console.log('🏁 Click su AVVIA SIMULAZIONE');
+                runSimulation(game);
+            });
+        } else {
+            console.error('❌ Pulsante run-btn non trovato!');
+        }
+    };
+
+    const runSimulation = async (game) => {
+        console.log('🚀 runSimulation chiamata!');
+        const btn = document.getElementById('run-btn');
+        if (!btn) {
+            console.error('❌ Pulsante non trovato in runSimulation');
+            return;
+        }
+
+        console.log('✅ Avvio simulazione...');
+        console.log('Setup:', state.setup);
+        console.log('Auto:', state.selectedCar?.name);
+        
+        btn.disabled = true;
+        btn.textContent = '⏳ SIMULAZIONE...';
+
+        try {
+            const carIndex = game.ownedCars.indexOf(state.selectedCar);
+            console.log('📤 Invio richiesta simulazione, carIndex:', carIndex);
+            
+            const result = await api('run-simulation', {
+                method: 'POST',
+                body: JSON.stringify({ carIndex, setup: state.setup })
+            });
+
+            console.log('📥 Risultato ricevuto:', result);
+
+            state.attemptsUsed++;
+            state.results.push(result.result);
+            state.leaderboard = result.leaderboard;
+
+            // Aggiungi premi
+            if (result.result.reward.money > 0) {
+                game.resources.money.value += result.result.reward.money;
+            }
+            if (result.result.reward.parts > 0) {
+                game.resources.parts.value += result.result.reward.parts;
+            }
+            game.render();
+            
+            console.log('💾 Salvo stato...');
+            await window.saveGameToServer(true);
+
+            // Re-render
+            console.log('🎨 Re-render pagina beta');
+            await render(document.getElementById('betaContainer'), game);
+
+        } catch (error) {
+            console.error('❌ Errore simulazione:', error);
+            console.error('Stack:', error.stack);
+            alert('❌ Errore: ' + error.message);
+            btn.disabled = false;
+            btn.textContent = '🏁 AVVIA SIMULAZIONE';
+        }
+    };
+
+    return { render, api, runSimulation };
+
+})();
