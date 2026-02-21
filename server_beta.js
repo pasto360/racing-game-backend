@@ -1,44 +1,33 @@
-// =====================================================
-// SERVER_BETA.JS - API Simulatore COMPLETO
-// =====================================================
-
+// SERVER_BETA.JS - VERSIONE SEMPLIFICATA (auto fissa)
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
 const path = require('path');
 
-// Dipendenze iniettate dal server principale
 let authenticateToken = null;
 let pool = null;
 
-// Carica circuiti
 const circuitsPath = path.join(__dirname, 'beta_circuits.json');
 let circuits = [];
 try {
-    const fileContent = fs.readFileSync(circuitsPath, 'utf8');
-    circuits = JSON.parse(fileContent).circuits;
+    circuits = JSON.parse(fs.readFileSync(circuitsPath, 'utf8')).circuits;
     console.log('✅ Circuiti beta caricati:', circuits.length);
 } catch (error) {
     console.error('❌ Errore caricamento circuiti:', error.message);
 }
 
-// Funzione per ottenere circuito settimanale
 const getWeeklyCircuit = () => {
     const now = new Date();
     const weekNumber = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
-    const index = weekNumber % circuits.length;
-    return circuits[index];
+    return circuits[weekNumber % circuits.length];
 };
 
-// Calcola numero settimana
 const getWeekNumber = () => {
     const now = new Date();
     return Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
 };
 
-// =====================================================
 // GET /api/beta/weekly-challenge
-// =====================================================
 router.get('/weekly-challenge', (req, res, next) => {
     if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
     authenticateToken(req, res, next);
@@ -53,7 +42,6 @@ router.get('/weekly-challenge', (req, res, next) => {
         let leaderboard = [];
 
         try {
-            // Controlla se ha già corso
             const resultCheck = await pool.query(`
                 SELECT total_time, best_lap, position, dnf, dnf_lap
                 FROM beta_race_results
@@ -74,14 +62,8 @@ router.get('/weekly-challenge', (req, res, next) => {
                 };
             }
 
-            // Classifica
             const leaderboardResult = await pool.query(`
-                SELECT 
-                    u.username,
-                    u.id as user_id,
-                    brr.total_time,
-                    brr.best_lap,
-                    brr.car_name
+                SELECT u.username, u.id as user_id, brr.total_time, brr.best_lap
                 FROM beta_race_results brr
                 JOIN users u ON u.id = brr.user_id
                 WHERE brr.week_number = $1 AND brr.dnf = FALSE
@@ -94,11 +76,10 @@ router.get('/weekly-challenge', (req, res, next) => {
                 userId: r.user_id,
                 totalTime: parseFloat(r.total_time),
                 bestLap: parseFloat(r.best_lap),
-                carName: r.car_name
+                carName: 'Beta Racer'
             }));
         } catch (dbError) {
-            console.error('⚠️ Errore DB (tabella potrebbe non esistere):', dbError.message);
-            // Continua senza dati DB
+            console.log('⚠️ DB error (ignorato):', dbError.message);
         }
 
         res.json({ circuit, hasRaced, result, leaderboard });
@@ -109,19 +90,19 @@ router.get('/weekly-challenge', (req, res, next) => {
     }
 });
 
-// =====================================================
 // POST /api/beta/run-simulation
-// =====================================================
 router.post('/run-simulation', (req, res, next) => {
     if (!authenticateToken) return res.status(500).json({ error: 'Auth not initialized' });
     authenticateToken(req, res, next);
 }, async (req, res) => {
     try {
         const userId = req.user?.userId;
-        const { carIndex, setup } = req.body;
+        const { setup } = req.body;
         const weekNumber = getWeekNumber();
 
-        // Controlla se ha già corso (se tabella esiste)
+        console.log('🏁 Simulazione userId:', userId);
+
+        // Check se ha già corso
         try {
             const existingResult = await pool.query(`
                 SELECT id FROM beta_race_results WHERE user_id = $1 AND week_number = $2
@@ -131,25 +112,17 @@ router.post('/run-simulation', (req, res, next) => {
                 return res.status(400).json({ error: 'Hai già corso questa settimana!' });
             }
         } catch (dbError) {
-            console.error('⚠️ Tabella beta_race_results non esiste ancora. Crearla su Supabase!');
-            // Continua comunque (per testare)
+            console.log('⚠️ Check esistenza ignorato');
         }
 
-        // Carica auto dal DB
-        const gameStateResult = await pool.query('SELECT game_state FROM game_state WHERE user_id = $1', [userId]);
-        const gameState = gameStateResult.rows[0]?.game_state || {};
-        const ownedCars = gameState.ownedCars || [];
-        
-        if (!ownedCars[carIndex]) {
-            return res.status(400).json({ error: 'Auto non trovata' });
-        }
-        
-        const car = ownedCars[carIndex];
-        const power = (car.stats.engine + car.stats.electronics + car.stats.body + car.stats.aero) || 350;
+        // ✅ AUTO FISSA PER TUTTI
+        const power = 380;
+        const baseWeight = 1250;
         const circuit = getWeeklyCircuit();
         
-        // CALCOLO FISICA
-        const baseWeight = 1000 + (car.stats.body * 2);
+        console.log('🏎️ Auto: 380 HP, 1250 kg');
+
+        // FISICA
         let maxSpeed = (power / (baseWeight + setup.fuel)) * 200;
         maxSpeed -= setup.downforce * 0.5;
         if (setup.gearRatio === 'short') maxSpeed -= 10;
@@ -160,17 +133,15 @@ router.post('/run-simulation', (req, res, next) => {
         if (setup.tires === 'hard') grip = 0.98;
         grip += (2.2 - setup.tirePressure) * 0.05;
         
-        let fuelPerLap = 2.5;
-        fuelPerLap += circuit.tightCorners * 0.15;
-        fuelPerLap += setup.downforce * 0.02;
+        let fuelPerLap = 2.5 + circuit.tightCorners * 0.15 + setup.downforce * 0.02;
         if (setup.tires === 'soft') fuelPerLap *= 1.1;
         if (setup.engineMap === 'power') fuelPerLap *= 1.15;
         if (setup.engineMap === 'eco') fuelPerLap *= 0.9;
         
-        let tireWearPerLap = setup.tires === 'soft' ? 0.005 : setup.tires === 'hard' ? 0.002 : 0.003;
+        let tireWearPerLap = (setup.tires === 'soft' ? 0.005 : setup.tires === 'hard' ? 0.002 : 0.003);
         tireWearPerLap += circuit.tightCorners * 0.0005;
         
-        // Simula gara
+        // Simula
         let totalTime = 0;
         let bestLap = 999;
         let fuel = setup.fuel;
@@ -195,9 +166,7 @@ router.post('/run-simulation', (req, res, next) => {
             lapTime += (100 - setup.downforce) * 0.05;
             lapTime -= maxSpeed * 0.01;
             
-            if (circuit.bumps >= 3 && setup.suspension === -30) {
-                lapTime += 0.5;
-            }
+            if (circuit.bumps >= 3 && setup.suspension === -30) lapTime += 0.5;
             
             totalTime += lapTime;
             if (lapTime < bestLap) bestLap = lapTime;
@@ -206,13 +175,11 @@ router.post('/run-simulation', (req, res, next) => {
             tireWear += tireWearPerLap;
         }
         
-        // Calcola posizione
         const avgTime = (circuit.length / 1000) * circuit.laps * 70;
         const variance = (totalTime - avgTime) / avgTime;
         let position = Math.floor(25 + variance * 50);
         position = Math.max(1, Math.min(50, position));
         
-        // Premi
         let reward = { money: 0, parts: 0 };
         if (!dnf) {
             if (position === 1) reward = { money: 50000, parts: 1000 };
@@ -222,7 +189,7 @@ router.post('/run-simulation', (req, res, next) => {
             else if (position <= 50) reward = { money: 1000, parts: 50 };
         }
         
-        // Salva nel DB (se tabella esiste)
+        // Salva DB
         try {
             await pool.query(`
                 INSERT INTO beta_race_results 
@@ -231,10 +198,9 @@ router.post('/run-simulation', (req, res, next) => {
             `, [
                 userId, weekNumber, circuit.id,
                 dnf ? null : totalTime, bestLap, position, dnf, dnfLap,
-                JSON.stringify(setup), car.name, power
+                JSON.stringify(setup), 'Beta Racer', power
             ]);
             
-            // Aggiungi premi
             if (reward.money > 0 || reward.parts > 0) {
                 await pool.query(`
                     UPDATE game_state SET
@@ -247,15 +213,13 @@ router.post('/run-simulation', (req, res, next) => {
                 `, [reward.money, reward.parts, userId]);
             }
         } catch (dbError) {
-            console.error('⚠️ Errore salvataggio DB:', dbError.message);
-            // Continua senza salvare
+            console.error('⚠️ Salvataggio DB fallito:', dbError.message);
         }
         
-        // Ricarica classifica
         let leaderboard = [];
         try {
             const leaderboardResult = await pool.query(`
-                SELECT u.username, u.id as user_id, brr.total_time, brr.best_lap, brr.car_name
+                SELECT u.username, u.id as user_id, brr.total_time, brr.best_lap
                 FROM beta_race_results brr
                 JOIN users u ON u.id = brr.user_id
                 WHERE brr.week_number = $1 AND brr.dnf = FALSE
@@ -268,13 +232,11 @@ router.post('/run-simulation', (req, res, next) => {
                 userId: r.user_id,
                 totalTime: parseFloat(r.total_time),
                 bestLap: parseFloat(r.best_lap),
-                carName: r.car_name
+                carName: 'Beta Racer'
             }));
-        } catch (dbError) {
-            console.error('⚠️ Errore caricamento classifica');
-        }
+        } catch (dbError) {}
         
-        console.log('✅ Simulazione completata - Pos:', position, 'DNF:', dnf);
+        console.log('✅ Simulazione OK - Pos:', position, 'DNF:', dnf);
         
         res.json({
             result: {
@@ -289,7 +251,7 @@ router.post('/run-simulation', (req, res, next) => {
         });
         
     } catch (error) {
-        console.error('❌ Errore run-simulation:', error);
+        console.error('❌ Errore simulazione:', error);
         res.status(500).json({ error: error.message });
     }
 });
