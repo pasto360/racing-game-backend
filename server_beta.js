@@ -1,4 +1,4 @@
-// SERVER_BETA.JS - VERSIONE SEMPLIFICATA (auto fissa)
+// SERVER_BETA.JS - 1 TENTATIVO AL GIORNO
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
@@ -36,38 +36,64 @@ router.get('/weekly-challenge', (req, res, next) => {
         const userId = req.user?.userId;
         const circuit = getWeeklyCircuit();
         const weekNumber = getWeekNumber();
+        const today = new Date().toISOString().split('T')[0];
 
-        let hasRaced = false;
-        let result = null;
+        let hasRacedToday = false;
+        let todayResult = null;
+        let bestResult = null;
         let leaderboard = [];
+        let attemptsThisWeek = 0;
 
         try {
-            const resultCheck = await pool.query(`
+            // Check tentativo di oggi
+            const todayCheck = await pool.query(`
+                SELECT id FROM beta_race_results
+                WHERE user_id = $1 AND week_number = $2 AND DATE(created_at) = $3
+            `, [userId, weekNumber, today]);
+            
+            hasRacedToday = todayCheck.rows.length > 0;
+
+            // Carica MIGLIOR risultato della settimana
+            const bestCheck = await pool.query(`
                 SELECT total_time, best_lap, position, dnf, dnf_lap
                 FROM beta_race_results
-                WHERE user_id = $1 AND week_number = $2
+                WHERE user_id = $1 AND week_number = $2 AND dnf = FALSE
+                ORDER BY total_time ASC
+                LIMIT 1
             `, [userId, weekNumber]);
 
-            hasRaced = resultCheck.rows.length > 0;
-            
-            if (hasRaced) {
-                const r = resultCheck.rows[0];
-                result = {
-                    totalTime: parseFloat(r.total_time) || 0,
+            if (bestCheck.rows.length > 0) {
+                const r = bestCheck.rows[0];
+                bestResult = {
+                    totalTime: parseFloat(r.total_time),
                     bestLap: parseFloat(r.best_lap),
                     position: r.position,
-                    dnf: r.dnf,
-                    dnfLap: r.dnf_lap,
+                    dnf: false,
                     reward: { money: 0, parts: 0 }
                 };
             }
 
+            // Conta tentativi questa settimana
+            const countResult = await pool.query(`
+                SELECT COUNT(*) as count FROM beta_race_results
+                WHERE user_id = $1 AND week_number = $2
+            `, [userId, weekNumber]);
+            
+            attemptsThisWeek = parseInt(countResult.rows[0]?.count) || 0;
+
+            // Classifica: MIGLIOR tempo per utente
             const leaderboardResult = await pool.query(`
-                SELECT u.username, u.id as user_id, brr.total_time, brr.best_lap
+                SELECT 
+                    u.username, 
+                    u.id as user_id, 
+                    MIN(brr.total_time) as total_time, 
+                    MIN(brr.best_lap) as best_lap,
+                    COUNT(*) as attempts
                 FROM beta_race_results brr
                 JOIN users u ON u.id = brr.user_id
                 WHERE brr.week_number = $1 AND brr.dnf = FALSE
-                ORDER BY brr.total_time ASC
+                GROUP BY u.username, u.id
+                ORDER BY total_time ASC
                 LIMIT 50
             `, [weekNumber]);
 
@@ -76,13 +102,20 @@ router.get('/weekly-challenge', (req, res, next) => {
                 userId: r.user_id,
                 totalTime: parseFloat(r.total_time),
                 bestLap: parseFloat(r.best_lap),
+                attempts: parseInt(r.attempts),
                 carName: 'Beta Racer'
             }));
         } catch (dbError) {
             console.log('⚠️ DB error (ignorato):', dbError.message);
         }
 
-        res.json({ circuit, hasRaced, result, leaderboard });
+        res.json({ 
+            circuit, 
+            hasRacedToday, 
+            result: bestResult,
+            attemptsThisWeek,
+            leaderboard 
+        });
 
     } catch (error) {
         console.error('❌ Errore weekly-challenge:', error);
@@ -99,30 +132,29 @@ router.post('/run-simulation', (req, res, next) => {
         const userId = req.user?.userId;
         const { setup } = req.body;
         const weekNumber = getWeekNumber();
+        const today = new Date().toISOString().split('T')[0];
 
         console.log('🏁 Simulazione userId:', userId);
 
-        // Check se ha già corso
+        // Check se ha già corso OGGI
         try {
-            const existingResult = await pool.query(`
-                SELECT id FROM beta_race_results WHERE user_id = $1 AND week_number = $2
-            `, [userId, weekNumber]);
+            const todayResult = await pool.query(`
+                SELECT id FROM beta_race_results 
+                WHERE user_id = $1 AND week_number = $2 AND DATE(created_at) = $3
+            `, [userId, weekNumber, today]);
             
-            if (existingResult.rows.length > 0) {
-                return res.status(400).json({ error: 'Hai già corso questa settimana!' });
+            if (todayResult.rows.length > 0) {
+                return res.status(400).json({ error: 'Hai già corso oggi! Riprova domani per migliorare il tuo tempo.' });
             }
         } catch (dbError) {
-            console.log('⚠️ Check esistenza ignorato');
+            console.log('⚠️ Check giornaliero ignorato');
         }
 
-        // ✅ AUTO FISSA PER TUTTI
         const power = 380;
         const baseWeight = 1250;
         const circuit = getWeeklyCircuit();
-        
-        console.log('🏎️ Auto: 380 HP, 1250 kg');
 
-        // FISICA
+        // FISICA (identica)
         let maxSpeed = (power / (baseWeight + setup.fuel)) * 200;
         maxSpeed -= setup.downforce * 0.5;
         if (setup.gearRatio === 'short') maxSpeed -= 10;
@@ -141,7 +173,6 @@ router.post('/run-simulation', (req, res, next) => {
         let tireWearPerLap = (setup.tires === 'soft' ? 0.005 : setup.tires === 'hard' ? 0.002 : 0.003);
         tireWearPerLap += circuit.tightCorners * 0.0005;
         
-        // Simula
         let totalTime = 0;
         let bestLap = 999;
         let fuel = setup.fuel;
@@ -189,7 +220,7 @@ router.post('/run-simulation', (req, res, next) => {
             else if (position <= 50) reward = { money: 1000, parts: 50 };
         }
         
-        // Salva DB
+        // Salva tentativo
         try {
             await pool.query(`
                 INSERT INTO beta_race_results 
@@ -201,7 +232,17 @@ router.post('/run-simulation', (req, res, next) => {
                 JSON.stringify(setup), 'Beta Racer', power
             ]);
             
-            if (reward.money > 0 || reward.parts > 0) {
+            // Premi SOLO se è il miglior tempo della settimana
+            const bestTime = await pool.query(`
+                SELECT MIN(total_time) as best FROM beta_race_results
+                WHERE user_id = $1 AND week_number = $2 AND dnf = FALSE
+            `, [userId, weekNumber]);
+            
+            const isNewBest = !dnf && bestTime.rows[0]?.best === totalTime;
+            
+            console.log('📊 Nuovo tentativo - DNF:', dnf, 'Tempo:', totalTime, 'Miglior record:', isNewBest);
+            
+            if (isNewBest && (reward.money > 0 || reward.parts > 0)) {
                 await pool.query(`
                     UPDATE game_state SET
                         resources = jsonb_set(
@@ -216,14 +257,20 @@ router.post('/run-simulation', (req, res, next) => {
             console.error('⚠️ Salvataggio DB fallito:', dbError.message);
         }
         
+        // Ricarica classifica
         let leaderboard = [];
         try {
             const leaderboardResult = await pool.query(`
-                SELECT u.username, u.id as user_id, brr.total_time, brr.best_lap
+                SELECT 
+                    u.username, 
+                    u.id as user_id, 
+                    MIN(brr.total_time) as total_time, 
+                    MIN(brr.best_lap) as best_lap
                 FROM beta_race_results brr
                 JOIN users u ON u.id = brr.user_id
                 WHERE brr.week_number = $1 AND brr.dnf = FALSE
-                ORDER BY brr.total_time ASC
+                GROUP BY u.username, u.id
+                ORDER BY total_time ASC
                 LIMIT 50
             `, [weekNumber]);
             
