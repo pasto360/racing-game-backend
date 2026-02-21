@@ -165,10 +165,13 @@ router.post('/run-simulation', (req, res, next) => {
         if (setup.tires === 'hard') grip = 0.98;
         grip += (2.2 - setup.tirePressure) * 0.05;
         
-        let fuelPerLap = 2.5 + circuit.tightCorners * 0.15 + setup.downforce * 0.02;
-        if (setup.tires === 'soft') fuelPerLap *= 1.1;
-        if (setup.engineMap === 'power') fuelPerLap *= 1.15;
-        if (setup.engineMap === 'eco') fuelPerLap *= 0.9;
+        // ✅ Consumo base: 3.4 L/giro (modificato da setup)
+        let fuelPerLap = 3.4;
+        fuelPerLap += circuit.tightCorners * 0.08;  // Curve strette aumentano consumo
+        fuelPerLap += setup.downforce * 0.015;       // Deportanza aumenta consumo
+        if (setup.tires === 'soft') fuelPerLap *= 1.08;     // Gomme morbide +8%
+        if (setup.engineMap === 'power') fuelPerLap *= 1.12; // Mappatura aggressiva +12%
+        if (setup.engineMap === 'eco') fuelPerLap *= 0.92;   // Mappatura eco -8%
         
         let tireWearPerLap = (setup.tires === 'soft' ? 0.005 : setup.tires === 'hard' ? 0.002 : 0.003);
         tireWearPerLap += circuit.tightCorners * 0.0005;
