@@ -36,7 +36,9 @@ router.get('/weekly-challenge', (req, res, next) => {
         const userId = req.user?.userId;
         const circuit = getWeeklyCircuit();
         const weekNumber = getWeekNumber();
-        const today = new Date().toISOString().split('T')[0];
+        
+        const now = new Date();
+        const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
 
         let hasRacedToday = false;
         let todayResult = null;
@@ -45,11 +47,11 @@ router.get('/weekly-challenge', (req, res, next) => {
         let attemptsThisWeek = 0;
 
         try {
-            // Check tentativo di oggi
+            // Check tentativo di oggi (UTC)
             const todayCheck = await pool.query(`
                 SELECT id FROM beta_race_results
-                WHERE user_id = $1 AND week_number = $2 AND DATE(created_at) = $3
-            `, [userId, weekNumber, today]);
+                WHERE user_id = $1 AND week_number = $2 AND created_at >= $3
+            `, [userId, weekNumber, todayStart.toISOString()]);
             
             hasRacedToday = todayCheck.rows.length > 0;
 
@@ -103,8 +105,10 @@ router.get('/weekly-challenge', (req, res, next) => {
                 totalTime: parseFloat(r.total_time),
                 bestLap: parseFloat(r.best_lap),
                 attempts: parseInt(r.attempts),
-                carName: 'Beta Racer'
+                carName: 'Thunderbolt R-9'
             }));
+            
+            console.log('📊 Classifica caricata:', leaderboard.length, 'utenti');
         } catch (dbError) {
             console.log('⚠️ DB error (ignorato):', dbError.message);
         }
@@ -132,16 +136,19 @@ router.post('/run-simulation', (req, res, next) => {
         const userId = req.user?.userId;
         const { setup } = req.body;
         const weekNumber = getWeekNumber();
-        const today = new Date().toISOString().split('T')[0];
+        
+        // ✅ Check giornaliero con timezone UTC (evita bypass)
+        const now = new Date();
+        const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
 
-        console.log('🏁 Simulazione userId:', userId);
+        console.log('🏁 Simulazione userId:', userId, '- Oggi UTC:', todayStart.toISOString());
 
         // Check se ha già corso OGGI
         try {
             const todayResult = await pool.query(`
                 SELECT id FROM beta_race_results 
-                WHERE user_id = $1 AND week_number = $2 AND DATE(created_at) = $3
-            `, [userId, weekNumber, today]);
+                WHERE user_id = $1 AND week_number = $2 AND created_at >= $3
+            `, [userId, weekNumber, todayStart.toISOString()]);
             
             if (todayResult.rows.length > 0) {
                 return res.status(400).json({ error: 'Hai già corso oggi! Riprova domani per migliorare il tuo tempo.' });
