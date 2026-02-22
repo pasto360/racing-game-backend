@@ -209,19 +209,15 @@ router.post('/run-simulation', (req, res, next) => {
             tireWear += tireWearPerLap;
         }
         
+        // Calcola posizione STIMATA (la vera classifica si basa sul tempo reale)
         const avgTime = (circuit.length / 1000) * circuit.laps * 70;
-        const variance = (totalTime - avgTime) / avgTime;
-        let position = Math.floor(25 + variance * 50);
-        position = Math.max(1, Math.min(50, position));
+        const variance = dnf ? 999 : (totalTime - avgTime) / avgTime;
+        let estimatedPosition = Math.floor(25 + variance * 50);
+        estimatedPosition = Math.max(1, Math.min(50, estimatedPosition));
         
-        let reward = { money: 0, parts: 0 };
-        if (!dnf) {
-            if (position === 1) reward = { money: 50000, parts: 1000 };
-            else if (position === 2) reward = { money: 30000, parts: 600 };
-            else if (position === 3) reward = { money: 15000, parts: 300 };
-            else if (position <= 10) reward = { money: 5000, parts: 100 };
-            else if (position <= 50) reward = { money: 1000, parts: 50 };
-        }
+        // ⚠️ PREMI SOLO A FINE SETTIMANA (lunedì reset)
+        // Non dare premi ora - saranno assegnati dal reset settimanale al top 3
+        const reward = { money: 0, parts: 0 };
         
         // Salva tentativo
         try {
@@ -231,31 +227,11 @@ router.post('/run-simulation', (req, res, next) => {
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             `, [
                 userId, weekNumber, circuit.id,
-                dnf ? null : totalTime, bestLap, position, dnf, dnfLap,
-                JSON.stringify(setup), 'Beta Racer', power
+                dnf ? null : totalTime, bestLap, estimatedPosition, dnf, dnfLap,
+                JSON.stringify(setup), 'Thunderbolt R-9', power
             ]);
             
-            // Premi SOLO se è il miglior tempo della settimana
-            const bestTime = await pool.query(`
-                SELECT MIN(total_time) as best FROM beta_race_results
-                WHERE user_id = $1 AND week_number = $2 AND dnf = FALSE
-            `, [userId, weekNumber]);
-            
-            const isNewBest = !dnf && bestTime.rows[0]?.best === totalTime;
-            
-            console.log('📊 Nuovo tentativo - DNF:', dnf, 'Tempo:', totalTime, 'Miglior record:', isNewBest);
-            
-            if (isNewBest && (reward.money > 0 || reward.parts > 0)) {
-                await pool.query(`
-                    UPDATE game_state SET
-                        resources = jsonb_set(
-                            jsonb_set(resources, '{money,value}', 
-                                (FLOOR((resources->'money'->>'value')::numeric)::bigint + $1)::text::jsonb),
-                            '{parts,value}', 
-                                (FLOOR((resources->'parts'->>'value')::numeric)::bigint + $2)::text::jsonb)
-                    WHERE user_id = $3
-                `, [reward.money, reward.parts, userId]);
-            }
+            console.log('✅ Risultato salvato - DNF:', dnf, 'Tempo:', totalTime);
         } catch (dbError) {
             console.error('⚠️ Salvataggio DB fallito:', dbError.message);
         }
@@ -286,16 +262,16 @@ router.post('/run-simulation', (req, res, next) => {
             }));
         } catch (dbError) {}
         
-        console.log('✅ Simulazione OK - Pos:', position, 'DNF:', dnf);
+        console.log('✅ Simulazione OK - Tempo:', totalTime.toFixed(3), 'DNF:', dnf);
         
         res.json({
             result: {
                 totalTime: dnf ? 0 : totalTime,
                 bestLap,
-                position,
+                position: estimatedPosition,
                 dnf,
                 dnfLap,
-                reward
+                reward: { money: 0, parts: 0 } // Premi solo a fine settimana
             },
             leaderboard
         });
