@@ -918,8 +918,71 @@ async function doWeeklyReset(weekTimestamp) {
             console.log('🏆 Premi assegnati a:', top3Result.rows.map(r => r.username));
         }
         
-        // AZZERA TUTTI
+        // AZZERA TUTTI reputation_weekly
         await pool.query('UPDATE game_state SET reputation_weekly = 0');
+        
+        // ✅ PREMI BETA - Top 3 simulatore settimanale
+        try {
+            const betaWeekNumber = Math.floor((Date.now() - new Date(new Date().getFullYear(), 0, 1).getTime()) / 604800000);
+            
+            const betaTop3 = await pool.query(`
+                SELECT 
+                    brr.user_id,
+                    u.username,
+                    MIN(brr.total_time) as best_time
+                FROM beta_race_results brr
+                JOIN users u ON u.id = brr.user_id
+                WHERE brr.week_number = $1 AND brr.dnf = FALSE
+                GROUP BY brr.user_id, u.username
+                ORDER BY best_time ASC
+                LIMIT 3
+            `, [betaWeekNumber]);
+            
+            if (betaTop3.rows.length > 0) {
+                // 1° posto: 50,000€ + 1,000 parti
+                if (betaTop3.rows[0]) {
+                    await pool.query(`
+                        UPDATE game_state SET
+                            resources = jsonb_set(
+                                jsonb_set(resources, '{money,value}', 
+                                    (FLOOR((resources->'money'->>'value')::numeric)::bigint + 50000)::text::jsonb),
+                                '{parts,value}', 
+                                    (FLOOR((resources->'parts'->>'value')::numeric)::bigint + 1000)::text::jsonb)
+                        WHERE user_id = $1
+                    `, [betaTop3.rows[0].user_id]);
+                }
+                
+                // 2° posto: 30,000€ + 600 parti
+                if (betaTop3.rows[1]) {
+                    await pool.query(`
+                        UPDATE game_state SET
+                            resources = jsonb_set(
+                                jsonb_set(resources, '{money,value}', 
+                                    (FLOOR((resources->'money'->>'value')::numeric)::bigint + 30000)::text::jsonb),
+                                '{parts,value}', 
+                                    (FLOOR((resources->'parts'->>'value')::numeric)::bigint + 600)::text::jsonb)
+                        WHERE user_id = $1
+                    `, [betaTop3.rows[1].user_id]);
+                }
+                
+                // 3° posto: 15,000€ + 300 parti
+                if (betaTop3.rows[2]) {
+                    await pool.query(`
+                        UPDATE game_state SET
+                            resources = jsonb_set(
+                                jsonb_set(resources, '{money,value}', 
+                                    (FLOOR((resources->'money'->>'value')::numeric)::bigint + 15000)::text::jsonb),
+                                '{parts,value}', 
+                                    (FLOOR((resources->'parts'->>'value')::numeric)::bigint + 300)::text::jsonb)
+                        WHERE user_id = $1
+                    `, [betaTop3.rows[2].user_id]);
+                }
+                
+                console.log('🏁 Premi Beta assegnati:', betaTop3.rows.map(r => `${r.username} (${r.best_time.toFixed(2)}s)`));
+            }
+        } catch (betaError) {
+            console.error('⚠️ Errore premi Beta (ignorato):', betaError.message);
+        }
         
         // Aggiorna tracker
         await pool.query(`
