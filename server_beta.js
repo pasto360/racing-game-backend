@@ -55,25 +55,26 @@ router.get('/weekly-challenge', (req, res, next) => {
             
             hasRacedToday = todayCheck.rows.length > 0;
 
-            // Carica MIGLIOR risultato della settimana
-            const bestCheck = await pool.query(`
-                SELECT total_time, best_lap, position, dnf, dnf_lap
+            // Carica TUTTI i tentativi della settimana (ordinati dal più recente)
+            const allAttempts = await pool.query(`
+                SELECT total_time, best_lap, position, dnf, dnf_lap, created_at
                 FROM beta_race_results
-                WHERE user_id = $1 AND week_number = $2 AND dnf = FALSE
-                ORDER BY total_time ASC
-                LIMIT 1
+                WHERE user_id = $1 AND week_number = $2
+                ORDER BY created_at DESC
             `, [userId, weekNumber]);
 
-            if (bestCheck.rows.length > 0) {
-                const r = bestCheck.rows[0];
-                bestResult = {
-                    totalTime: parseFloat(r.total_time),
-                    bestLap: parseFloat(r.best_lap),
-                    position: r.position,
-                    dnf: false,
-                    reward: { money: 0, parts: 0 }
-                };
-            }
+            const attempts = allAttempts.rows.map(r => ({
+                totalTime: parseFloat(r.total_time) || 0,
+                bestLap: parseFloat(r.best_lap),
+                position: r.position,
+                dnf: r.dnf,
+                dnfLap: r.dnf_lap,
+                date: r.created_at,
+                reward: { money: 0, parts: 0 }
+            }));
+            
+            // Miglior risultato (per compatibilità)
+            const bestAttempt = attempts.find(a => !a.dnf) || null;
 
             // Conta tentativi questa settimana
             const countResult = await pool.query(`
@@ -116,8 +117,9 @@ router.get('/weekly-challenge', (req, res, next) => {
         res.json({ 
             circuit, 
             hasRacedToday, 
-            result: bestResult,
-            attemptsThisWeek,
+            attempts,
+            bestResult: bestAttempt,
+            attemptsThisWeek: attempts.length,
             leaderboard 
         });
 
