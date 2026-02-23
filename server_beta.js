@@ -41,10 +41,9 @@ router.get('/weekly-challenge', (req, res, next) => {
         const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
 
         let hasRacedToday = false;
-        let todayResult = null;
-        let bestResult = null;
+        let attempts = [];
+        let bestAttempt = null;
         let leaderboard = [];
-        let attemptsThisWeek = 0;
 
         try {
             // Check tentativo di oggi (UTC)
@@ -73,16 +72,11 @@ router.get('/weekly-challenge', (req, res, next) => {
                 reward: { money: 0, parts: 0 }
             }));
             
-            // Miglior risultato (per compatibilità)
-            const bestAttempt = attempts.find(a => !a.dnf) || null;
-
-            // Conta tentativi questa settimana
-            const countResult = await pool.query(`
-                SELECT COUNT(*) as count FROM beta_race_results
-                WHERE user_id = $1 AND week_number = $2
-            `, [userId, weekNumber]);
-            
-            attemptsThisWeek = parseInt(countResult.rows[0]?.count) || 0;
+            // Miglior risultato (non-DNF con tempo minore)
+            const validAttempts = attempts.filter(a => !a.dnf && a.totalTime > 0);
+            const bestAttempt = validAttempts.length > 0 
+                ? validAttempts.reduce((min, a) => a.totalTime < min.totalTime ? a : min)
+                : null;
 
             // Classifica: MIGLIOR tempo per utente
             const leaderboardResult = await pool.query(`
@@ -280,6 +274,7 @@ router.post('/run-simulation', (req, res, next) => {
                 position: estimatedPosition,
                 dnf,
                 dnfLap,
+                date: new Date().toISOString(),
                 reward: { money: 0, parts: 0 } // Premi solo a fine settimana
             },
             leaderboard
