@@ -53,6 +53,9 @@ router.get('/weekly-challenge', (req, res, next) => {
             `, [userId, weekNumber, todayStart.toISOString()]);
             
             hasRacedToday = todayCheck.rows.length > 0;
+            
+            console.log('🔍 Check oggi - userId:', userId, 'week:', weekNumber, 'todayStart:', todayStart.toISOString());
+            console.log('🔍 Risultati trovati:', todayCheck.rows.length, '→ hasRacedToday:', hasRacedToday);
 
             // Carica TUTTI i tentativi della settimana (ordinati dal più recente)
             const allAttempts = await pool.query(`
