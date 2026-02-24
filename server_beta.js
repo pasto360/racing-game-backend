@@ -190,10 +190,34 @@ router.post('/run-simulation', (req, res, next) => {
             tireWear += tireWearPerLap;
         }
         
-        const avgTime = (circuit.length / 1000) * circuit.laps * 70;
-        const variance = dnf ? 999 : (totalTime - avgTime) / avgTime;
-        let position = Math.floor(25 + variance * 50);
-        position = Math.max(1, Math.min(50, position));
+        // Calcola posizione REALE confrontando con classifica esistente
+        let position = 1; // Default se primo
+        
+        if (!dnf) {
+            const classifica = await pool.query(`
+                SELECT COUNT(*) + 1 as pos
+                FROM (
+                    SELECT user_id, MIN(total_time) as best_time
+                    FROM beta_race_results
+                    WHERE week_number = $1 AND dnf = FALSE
+                    GROUP BY user_id
+                ) as leaderboard
+                WHERE best_time < $2
+            `, [weekNumber, totalTime]);
+            
+            position = parseInt(classifica.rows[0]?.pos) || 1;
+        } else {
+            // DNF = ultima posizione + 1
+            const totalPlayers = await pool.query(`
+                SELECT COUNT(DISTINCT user_id) as count
+                FROM beta_race_results
+                WHERE week_number = $1
+            `, [weekNumber]);
+            
+            position = parseInt(totalPlayers.rows[0]?.count) + 1 || 50;
+        }
+
+        console.log('📊 Posizione reale calcolata:', position, 'DNF:', dnf);
 
         // Salva nel DB
         await pool.query(`
