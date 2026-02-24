@@ -1,4 +1,4 @@
-// SERVER_BETA.JS - SISTEMA PULITO (STILE PVP)
+// SERVER_BETA.JS - VERSIONE FINALE v2
 const express = require('express');
 const router = express.Router();
 const fs = require('fs');
@@ -16,15 +16,18 @@ try {
     console.error('❌ Errore caricamento circuiti:', error.message);
 }
 
+// Circuito cambia ogni LUNEDÌ
 const getWeeklyCircuit = () => {
     const now = new Date();
-    const weekNumber = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+    const weekNumber = Math.floor((now - startOfYear) / 604800000);
     return circuits[weekNumber % circuits.length];
 };
 
 const getWeekNumber = () => {
     const now = new Date();
-    return Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 604800000);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+    return Math.floor((now - startOfYear) / 604800000);
 };
 
 // GET /api/beta/weekly-challenge
@@ -37,7 +40,7 @@ router.get('/weekly-challenge', (req, res, next) => {
         const circuit = getWeeklyCircuit();
         const weekNumber = getWeekNumber();
 
-        // ✅ CHECK GIORNALIERO SEMPLICE (come PvP)
+        // Check giornaliero: 1 tentativo al giorno
         const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
         
         const todayCheck = await pool.query(`
@@ -64,7 +67,7 @@ router.get('/weekly-challenge', (req, res, next) => {
             date: r.created_at
         }));
 
-        // Classifica
+        // Classifica mondiale (resetta ogni lunedì)
         const leaderboard = await pool.query(`
             SELECT u.username, u.id as user_id, MIN(brr.total_time) as total_time, MIN(brr.best_lap) as best_lap
             FROM beta_race_results brr
@@ -81,6 +84,7 @@ router.get('/weekly-challenge', (req, res, next) => {
             circuit,
             hasRacedToday,
             attempts,
+            weekNumber, // Esposto per frontend
             leaderboard: leaderboard.rows.map(r => ({
                 username: r.username,
                 userId: r.user_id,
@@ -105,7 +109,7 @@ router.post('/run-simulation', (req, res, next) => {
         const { setup } = req.body;
         const weekNumber = getWeekNumber();
         
-        // ✅ CHECK GIORNALIERO SEMPLICE
+        // Check giornaliero
         const today = new Date().toISOString().split('T')[0];
         
         const todayCheck = await pool.query(`
@@ -124,23 +128,20 @@ router.post('/run-simulation', (req, res, next) => {
         const baseWeight = 1250;
         const circuit = getWeeklyCircuit();
 
-        // FISICA
+        // FISICA COMPLETA
         let maxSpeed = (power / (baseWeight + setup.fuel)) * 200;
         maxSpeed -= setup.downforce * 0.5;
-        if (setup.gearRatio === 'short') maxSpeed -= 10;
-        if (setup.gearRatio === 'long') maxSpeed += 10;
         
         let grip = 1.0;
         if (setup.tires === 'soft') grip = 1.05;
         if (setup.tires === 'hard') grip = 0.98;
-        grip += (2.2 - setup.tirePressure) * 0.05;
         
+        // Consumo carburante (mappatura 1-10)
         let fuelPerLap = 3.4;
         fuelPerLap += circuit.tightCorners * 0.08;
         fuelPerLap += setup.downforce * 0.015;
         if (setup.tires === 'soft') fuelPerLap *= 1.08;
-        if (setup.engineMap === 'power') fuelPerLap *= 1.12;
-        if (setup.engineMap === 'eco') fuelPerLap *= 0.92;
+        fuelPerLap *= (0.85 + (setup.engineMap - 1) * 0.05); // 1=85%, 10=130%
         
         let tireWearPerLap = (setup.tires === 'soft' ? 0.005 : setup.tires === 'hard' ? 0.002 : 0.003);
         
@@ -150,6 +151,9 @@ router.post('/run-simulation', (req, res, next) => {
         let tireWear = 0;
         let dnf = false;
         let dnfLap = 0;
+        
+        // Aggressività pilota (1-10)
+        const errorChance = (setup.aggression - 1) / 9 * 0.8; // 1=0%, 10=80%
         
         for (let lap = 1; lap <= circuit.laps; lap++) {
             if (fuel < fuelPerLap) {
@@ -161,6 +165,7 @@ router.post('/run-simulation', (req, res, next) => {
             const currentGrip = grip * (1 - tireWear);
             const currentWeight = baseWeight + fuel;
             
+            // Tempo base
             let lapTime = 60 + Math.random() * 5;
             lapTime *= (circuit.length / 5000);
             lapTime *= (1200 / currentWeight);
@@ -168,7 +173,15 @@ router.post('/run-simulation', (req, res, next) => {
             lapTime += (100 - setup.downforce) * 0.05;
             lapTime -= maxSpeed * 0.01;
             
-            if (circuit.bumps >= 3 && setup.suspension === -30) lapTime += 0.5;
+            // Aggressività: più aggressivo = più veloce MA rischio errori
+            lapTime *= (1.1 - setup.aggression * 0.01); // 1=109%, 10=100%
+            
+            // Rischio errore
+            if (Math.random() < errorChance) {
+                const timeLost = 0.5 + Math.random() * 0.5; // 0.5-1.0 sec
+                lapTime += timeLost;
+                console.log(`   ⚠️ Giro ${lap}: errore pilota! +${timeLost.toFixed(2)}s`);
+            }
             
             totalTime += lapTime;
             if (lapTime < bestLap) bestLap = lapTime;
@@ -182,7 +195,7 @@ router.post('/run-simulation', (req, res, next) => {
         let position = Math.floor(25 + variance * 50);
         position = Math.max(1, Math.min(50, position));
 
-        // ✅ SALVA NEL DB
+        // Salva nel DB
         await pool.query(`
             INSERT INTO beta_race_results 
             (user_id, week_number, circuit_id, total_time, best_lap, position, dnf, dnf_lap, setup, car_name, car_power)
