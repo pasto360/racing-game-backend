@@ -317,8 +317,7 @@ app.get('/api/game/state', authenticateToken, async (req, res) => {
             resources: gs.resources,
             workshop: gs.workshop,
             ownedCars: gs.owned_cars,
-            drivers: gs.drivers,
-            currentDriver: gs.current_driver,
+            driver: gs.drivers || { level: 0, upgrading: false, upgradeEndTime: 0 }, // ✅ Campo drivers contiene il nuovo driver
             sponsors: gs.sponsors,
             currentSponsor: gs.current_sponsor,
             technologies: gs.technologies,
@@ -418,7 +417,7 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             JSON.stringify(gameState.resources),
             JSON.stringify(gameState.workshop),
             JSON.stringify(gameState.ownedCars),
-            JSON.stringify(gameState.drivers),
+            JSON.stringify(gameState.driver || []), // ✅ Salva nuovo driver nel campo drivers
             JSON.stringify(gameState.currentDriver),
             JSON.stringify(gameState.sponsors),
             JSON.stringify(gameState.currentSponsor),
