@@ -348,7 +348,12 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
         const { gameState } = req.body;
         const userId = req.user.userId;
         
+        console.log('📥 POST game/state - userId:', userId);
+        console.log('   driver:', gameState?.driver ? 'presente' : 'MANCANTE');
+        console.log('   driver.level:', gameState?.driver?.level);
+        
         if (!gameState || typeof gameState !== 'object') {
+            console.error('❌ gameState non valido:', typeof gameState);
             return res.status(400).json({ error: 'Dati non validi' });
         }
         
@@ -417,7 +422,7 @@ app.post('/api/game/state', authenticateToken, async (req, res) => {
             JSON.stringify(gameState.resources),
             JSON.stringify(gameState.workshop),
             JSON.stringify(gameState.ownedCars),
-            JSON.stringify(gameState.driver || []), // ✅ Salva nuovo driver nel campo drivers
+            JSON.stringify(gameState.driver || { level: 0, upgrading: false, upgradeEndTime: 0 }), // ✅ Driver nuovo sistema
             JSON.stringify(gameState.currentDriver),
             JSON.stringify(gameState.sponsors),
             JSON.stringify(gameState.currentSponsor),
