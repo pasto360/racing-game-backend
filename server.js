@@ -58,7 +58,7 @@ function validateResources(resources, previousResources) {
     const MAX_GAIN_PER_SAVE = {
         money: 50000,
         parts: 5000,
-        reputation: 500,
+        reputation: 2000, // ✅ Aumentato per missioni (es. allTech = 1500)
         energy: 100
     };
     
